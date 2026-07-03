@@ -36,6 +36,32 @@ before normal dispatch. Results are spliced back as strings into the command.
 
 ---
 
+## Backend daemon
+
+The `zscheme` identity has exactly one iroh endpoint on the network, so only
+one process may own it at a time. To allow concurrent REPLs and scripts,
+`zscheme` runs as a thin client by default: it connects to a per-user backend
+daemon over a Unix socket (`$XDG_RUNTIME_DIR/zscheme.sock`) and submits Scheme
+source for evaluation. The daemon is auto-spawned on first use and owns the
+secret bundle, the iroh endpoint, and the shared session environment — so
+`(define …)` in one REPL is visible in every other client.
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Client mode — auto-spawns the daemon if needed |
+| `daemon [--img FILE]` | Run the backend daemon in the foreground; replaces a running daemon. `--img` loads a session image at startup and saves it on shutdown |
+| `stop` | Stop the running daemon |
+| `reset` | Reset the shared session environment (drop all defines) |
+| `save [FILE]` | Save the session environment as Scheme source (stdout or FILE) — reload with `zscheme FILE` |
+| `--isolated` | Use a fresh per-connection environment instead of the shared one |
+| `standalone [script]` | Old in-process mode (own endpoint, no daemon) — only one at a time |
+
+The auto-spawned daemon inherits `MA_SECRET_BUNDLE_PASSPHRASE` from the
+client's environment and logs to `~/.local/share/ma/zscheme-daemon.log`.
+It runs until logout/reboot or `zscheme --stop`.
+
+---
+
 ## Quick start
 
 ### Arithmetic and strings

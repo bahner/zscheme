@@ -1,5 +1,8 @@
+mod client;
 mod context;
+mod daemon;
 mod executor;
+mod ipc;
 mod repl;
 mod scheme;
 mod transport;
@@ -31,7 +34,11 @@ struct Cli {
     #[command(flatten)]
     ma: MaArgs,
 
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+
     /// Script file to execute. If omitted, starts the interactive REPL.
+    /// Both run against the backend daemon (auto-spawned if needed).
     script: Option<std::path::PathBuf>,
 
     /// IPFS gateway URL (fallback when local Kubo is unavailable).
@@ -42,6 +49,38 @@ struct Cli {
     /// Lower values reduce latency for (@actor verb) and (rpc-send …) calls.
     #[arg(long, default_value_t = 50, env = "ZSCHEME_RPC_POLL_MS")]
     rpc_poll_ms: u64,
+
+    /// Use a fresh per-connection Scheme environment instead of the shared
+    /// daemon session environment.
+    #[arg(long)]
+    isolated: bool,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Cmd {
+    /// Run the backend daemon: own the iroh endpoint and evaluate Scheme
+    /// submitted by clients. Replaces a running daemon (fresh environment).
+    Daemon {
+        /// Session-image file: evaluated into the environment at startup
+        /// (if it exists) and rewritten on clean shutdown.
+        #[arg(long)]
+        img: Option<std::path::PathBuf>,
+    },
+    /// Stop the running backend daemon.
+    Stop,
+    /// Reset the daemon's shared session environment (drop all defines).
+    Reset,
+    /// Save the daemon's session environment as Scheme source.
+    Save {
+        /// Output file. Writes to stdout when omitted.
+        file: Option<std::path::PathBuf>,
+    },
+    /// Run fully in-process (own iroh endpoint, no daemon). Only one
+    /// standalone/daemon process per identity may run at a time.
+    Standalone {
+        /// Script file to execute. If omitted, starts the interactive REPL.
+        script: Option<std::path::PathBuf>,
+    },
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -56,7 +95,38 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Config ─────────────────────────────────────────────────────────────
+    // Set up stderr-only tracing (stdout is reserved for script output).
+    // Note: --log-level-stdout from MaArgs is a no-op in zscheme; logging
+    // is controlled via RUST_LOG or the YAML log_level / log_file settings.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    if let Some(Cmd::Stop) = cli.cmd {
+        return client::stop().await;
+    }
+    if let Some(Cmd::Reset) = cli.cmd {
+        return client::reset().await;
+    }
+    if let Some(Cmd::Save { file }) = cli.cmd {
+        return client::save(file).await;
+    }
+
+    // Default mode: thin client — no secret bundle, no iroh endpoint.
+    // The daemon (auto-spawned if needed) owns the single endpoint.
+    let (is_daemon, img, script) = match cli.cmd {
+        None => {
+            return client::run(cli.script.clone(), cli.isolated).await;
+        }
+        Some(Cmd::Daemon { img }) => (true, img, None),
+        Some(Cmd::Standalone { script }) => (false, None, script),
+        Some(Cmd::Stop | Cmd::Reset | Cmd::Save { .. }) => unreachable!(),
+    };
+
     let bundle_path_check = {
         let cfg_tmp = Config::from_args(&cli.ma, ZSCHEME_SLUG)?;
         cfg_tmp.effective_secret_bundle()?
@@ -70,18 +140,7 @@ async fn main() -> Result<()> {
         Config::from_args(&cli.ma, ZSCHEME_SLUG)?
     };
 
-    // Set up stderr-only tracing (stdout is reserved for script output).
-    // Note: --log-level-stdout from MaArgs is a no-op in zscheme; logging
-    // is controlled via RUST_LOG or the YAML log_level / log_file settings.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
 
-    // ── Secret bundle ───────────────────────────────────────────────────────
     let mut secrets = load_secret_bundle(&core_config)?;
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
@@ -126,9 +185,26 @@ async fn main() -> Result<()> {
 
     // ── Run in LocalSet (required for Rc<…> + LocalBoxFuture) ─────────────
     let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async_main(ctx, cli.script, cli.rpc_poll_ms))
-        .await
+    if is_daemon {
+        local.run_until(daemon_main(ctx, img, cli.rpc_poll_ms)).await
+    } else {
+        local
+            .run_until(async_main(ctx, script, cli.rpc_poll_ms))
+            .await
+    }
+}
+
+/// Backend daemon mode: full identity + endpoint, serving frontend clients.
+async fn daemon_main(
+    ctx: std::rc::Rc<CliCtx>,
+    img: Option<std::path::PathBuf>,
+    poll_ms: u64,
+) -> Result<()> {
+    init_session_env();
+    spawn_rpc_poll_loop(ctx.clone(), poll_ms);
+    let result = daemon::run(ctx.clone(), img).await;
+    ctx.close().await;
+    result
 }
 
 async fn async_main(
@@ -143,23 +219,27 @@ async fn async_main(
     let scheme_ctx: Ctx = ctx.clone();
 
     // Start the RPC reply poll loop.
-    let ctx_poll = ctx.clone();
-    spawn_local(async move {
-        let interval = Duration::from_millis(poll_ms);
-        loop {
-            tokio::time::sleep(interval).await;
-            ctx_poll.poll_rpc_replies();
-        }
-    });
+    spawn_rpc_poll_loop(ctx.clone(), poll_ms);
 
     // Execute script or REPL, then close the endpoint cleanly.
     let result = if let Some(ref path) = script {
         executor::run_file(path, scheme_ctx).await
     } else {
-        repl::run_repl(scheme_ctx).await
+        repl::run_repl(repl::LocalEval(scheme_ctx)).await
     };
     ctx.close().await;
     result
+}
+
+/// Spawn the periodic RPC-inbox drain that routes replies to waiting calls.
+fn spawn_rpc_poll_loop(ctx: std::rc::Rc<CliCtx>, poll_ms: u64) {
+    spawn_local(async move {
+        let interval = Duration::from_millis(poll_ms);
+        loop {
+            tokio::time::sleep(interval).await;
+            ctx.poll_rpc_replies();
+        }
+    });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

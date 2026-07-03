@@ -14,7 +14,8 @@ use ma_zscheme::{
 };
 
 // ── Context ────────────────────────────────────────────────────────────────
-
+/// Redirect target for `(display …)` output (daemon mode).
+pub type DisplaySink = Box<dyn Fn(&str)>;
 /// Shared evaluation context threaded through all recursive eval calls.
 pub struct CliCtx {
     /// Dot-path registry — any DotRegistry backend (file, in-memory, IPFS, …).
@@ -38,6 +39,9 @@ pub struct CliCtx {
     pub gateway_url: String,
     /// reqwest client (reused across CID fetches).
     pub http: reqwest::Client,
+    /// Optional display redirect. When set (daemon mode), `(display …)`
+    /// output is routed here instead of stdout.
+    pub display_sink: RefCell<Option<DisplaySink>>,
 }
 
 /// Re-export the ma-zscheme Ctx type (Rc<dyn SchemeCtx>) for use in main.rs,
@@ -68,6 +72,7 @@ impl CliCtx {
             kubo_rpc_url,
             gateway_url,
             http: reqwest::Client::new(),
+            display_sink: RefCell::new(None),
         })
     }
 }
@@ -84,6 +89,12 @@ impl CliCtx {
     /// Close the iroh endpoint gracefully.
     pub async fn close(&self) {
         self.endpoint.borrow_mut().close().await;
+    }
+
+    /// Redirect `(display …)` output to `sink` (daemon mode), or restore
+    /// stdout output with `None`.
+    pub fn set_display_sink(&self, sink: Option<DisplaySink>) {
+        *self.display_sink.borrow_mut() = sink;
     }
 
     /// Drain the RPC inbox and route replies to waiting `oneshot` senders.
@@ -150,7 +161,11 @@ impl SchemeCtx for CliCtx {
     }
 
     fn display_output(&self, text: &str) {
-        print!("{text}");
+        if let Some(sink) = self.display_sink.borrow().as_ref() {
+            sink(text);
+        } else {
+            print!("{text}");
+        }
     }
 
     fn resolve_target(&self, raw: &str) -> Result<String, String> {

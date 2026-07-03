@@ -27,7 +27,7 @@ pub async fn run_file(path: &Path, ctx: Ctx) -> Result<()> {
 }
 
 /// Strip a leading shebang line (`#!…`) if present.
-fn strip_shebang(source: &str) -> &str {
+pub fn strip_shebang(source: &str) -> &str {
     if source.starts_with("#!") {
         match source.find('\n') {
             Some(pos) => &source[pos + 1..],

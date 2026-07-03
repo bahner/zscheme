@@ -3,17 +3,39 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 use crate::context::Ctx;
-use crate::scheme::{eval_source, SchemeErr, SchemeVal};
+use crate::scheme::{eval_source, SchemeVal};
 
 const PROMPT: &str = "zscheme> ";
 const PROMPT_CONT: &str = "    ... ";
+
+/// Evaluation backend for the REPL loop.
+///
+/// `Ok(None)` means the result was nil (print nothing); `Ok(Some(s))` is a
+/// display string for stdout; `Err(s)` is a pre-formatted error for stderr.
+#[allow(async_fn_in_trait)] // single-threaded LocalSet usage — no Send bound wanted
+pub trait ReplEval {
+    async fn eval(&mut self, source: &str) -> Result<Option<String>, String>;
+}
+
+/// In-process evaluator (standalone mode).
+pub struct LocalEval(pub Ctx);
+
+impl ReplEval for LocalEval {
+    async fn eval(&mut self, source: &str) -> Result<Option<String>, String> {
+        match eval_source(source, self.0.clone()).await {
+            Ok(SchemeVal::Nil) => Ok(None),
+            Ok(val) => Ok(Some(val.display())),
+            Err(e) => Err(crate::daemon::format_scheme_err(&e)),
+        }
+    }
+}
 
 /// Run an interactive read-eval-print loop with readline editing and history.
 ///
 /// History is persisted to `$XDG_DATA_HOME/ma/zscheme_history`.
 /// Multi-line expressions are buffered until parentheses balance.
 /// Ctrl-C clears the current buffer; Ctrl-D / EOF exits.
-pub async fn run_repl(ctx: Ctx) -> anyhow::Result<()> {
+pub async fn run_repl<E: ReplEval>(mut evaluator: E) -> anyhow::Result<()> {
     let history_path = history_file_path();
 
     let mut rl = DefaultEditor::new().map_err(|e| anyhow::anyhow!("readline init: {e}"))?;
@@ -87,20 +109,10 @@ pub async fn run_repl(ctx: Ctx) -> anyhow::Result<()> {
                 continue;
             }
 
-            match eval_source(&source, ctx.clone()).await {
-                Ok(SchemeVal::Nil) => {}
-                Ok(val) => println!("{}", val.display()),
-                Err(SchemeErr::Runtime(msg)) => eprintln!("error: {msg}"),
-                Err(SchemeErr::MaError(msg)) => eprintln!("ma error: {msg}"),
-                Err(SchemeErr::Undefined(sym)) => eprintln!("undefined: {sym}"),
-                Err(SchemeErr::Arity {
-                    name,
-                    expected,
-                    got,
-                }) => {
-                    eprintln!("{name}: expected {expected} args, got {got}")
-                }
-                Err(SchemeErr::ParseError(msg)) => eprintln!("parse error: {msg}"),
+            match evaluator.eval(&source).await {
+                Ok(None) => {}
+                Ok(Some(text)) => println!("{text}"),
+                Err(msg) => eprintln!("{msg}"),
             }
         }
     }

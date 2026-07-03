@@ -18,7 +18,7 @@ release:
 	cargo build --release
 
 install: release
-	install -m 755 target/release/zscheme $(BINDIR)/zscheme
+	sudo install -m 755 target/release/zscheme $(BINDIR)/zscheme
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
