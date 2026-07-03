@@ -19,7 +19,9 @@ anyhow = "1"
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
-ma-core = { version = "0.10", default-features = false, features = ["config", "iroh"] }
+ma-core = { version = "0.11", default-features = false, features = ["config", "iroh"] }
+ma-zscheme = "0.1.0"
+ma-zscheme-yaml = "0.1.0"
 directories = "5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rustyline = "14"
@@ -30,8 +32,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = "1"
 
+[patch.crates-io]
+ma-zscheme = { path = "../rust-ma-zscheme/ma-zscheme" }
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+

@@ -1,5 +1,4 @@
 /// Interactive REPL for zscheme — readline-backed with persistent history.
-
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -28,7 +27,11 @@ pub async fn run_repl(ctx: Ctx) -> anyhow::Result<()> {
     let mut depth: i32 = 0;
 
     loop {
-        let prompt = if buffer.is_empty() { PROMPT } else { PROMPT_CONT };
+        let prompt = if buffer.is_empty() {
+            PROMPT
+        } else {
+            PROMPT_CONT
+        };
 
         let line = match rl.readline(prompt) {
             Ok(l) => l,
@@ -90,7 +93,11 @@ pub async fn run_repl(ctx: Ctx) -> anyhow::Result<()> {
                 Err(SchemeErr::Runtime(msg)) => eprintln!("error: {msg}"),
                 Err(SchemeErr::MaError(msg)) => eprintln!("ma error: {msg}"),
                 Err(SchemeErr::Undefined(sym)) => eprintln!("undefined: {sym}"),
-                Err(SchemeErr::Arity { name, expected, got }) => {
+                Err(SchemeErr::Arity {
+                    name,
+                    expected,
+                    got,
+                }) => {
                     eprintln!("{name}: expected {expected} args, got {got}")
                 }
                 Err(SchemeErr::ParseError(msg)) => eprintln!("parse error: {msg}"),

@@ -1,5 +1,4 @@
 /// File executor: read a script file, strip shebang, evaluate all expressions.
-
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -45,7 +44,10 @@ mod tests {
 
     #[test]
     fn strips_shebang() {
-        assert_eq!(strip_shebang("#!/usr/local/bin/zscheme\n(+ 1 2)"), "(+ 1 2)");
+        assert_eq!(
+            strip_shebang("#!/usr/local/bin/zscheme\n(+ 1 2)"),
+            "(+ 1 2)"
+        );
     }
 
     #[test]

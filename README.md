@@ -158,4 +158,6 @@ The stdlib (`stdlib.ma`) provides `string-split`, `string-join`, `map`,
 | [`stdlib.ma`](stdlib.ma) | Standard library — pure zscheme implementations |
 | [`REFERENCE.md`](REFERENCE.md) | Complete language reference |
 | [`HANDBOOK.md`](HANDBOOK.md) | Practical user handbook |
-| [`zscheme-v1.txt`](zscheme-v1.txt) | Formal specification (RFC style, plain text) |
+
+The formal specification lives in the ma-spec repository:
+[ma-scheme-v1.md](https://github.com/bahner/ma-spec/blob/main/zscheme/ma-scheme-v1.md).

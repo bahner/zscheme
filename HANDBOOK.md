@@ -243,13 +243,56 @@ Use `rpc-send` when you need to handle errors gracefully:
 (safe-ping "@sky")   ; → "online" or "offline"
 ```
 
-Raise your own errors:
+Raise your own errors with `error`:
 
 ```scheme
 (define (require-value v msg)
   (if (equal? v #f) (error msg) v))
 
 (require-value (.my.aliases.sky) "sky alias not set")
+```
+
+### `guard` — catching errors (R7RS-small)
+
+Use `guard` to catch and recover from errors without halting the script.
+The caught variable is bound to the error message **string**.
+
+```scheme
+; Silently ignore a missing CID:
+(guard (e (#t nil))
+  (<bafyxxx>))
+
+; Log the error and fall back to a default:
+(guard (e (#t (display (string-append "load failed: " e))))
+  (<bafyxxx>))
+
+; Handle specific errors differently, re-raise everything else:
+(guard (e
+        ((string-contains e "not found") nil)
+        (#t (error e)))
+  (<bafyxxx>))
+```
+
+`guard` is also useful around RPC calls that may time out:
+
+```scheme
+(guard (e (#t "unknown"))
+  (@sky#house:who))
+```
+
+### `guard` in scripts (`!eval`)
+
+When a `!eval` document encounters an unguarded error, execution **halts**
+at that line. Use `guard` around any form that may fail so the rest of the
+script can continue:
+
+```scheme
+; Load a CID library — continue with a warning if unavailable:
+(guard (e (#t (display (string-append "warn: " e))))
+  (<bafyxxx>))
+
+; Subsequent lines only run if the guard above did not re-raise:
+(enter "@sky#room")
 ```
 
 ---

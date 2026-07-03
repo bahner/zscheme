@@ -126,6 +126,40 @@ Fragment atoms such as `#room` and `#house:enter` are treated as strings.
 'expr                                 ; shorthand
 ```
 
+### `guard`
+
+R7RS-small structured error handling (§6.11).  The caught variable is bound
+to the error message **string**.
+
+```scheme
+(guard (var
+        (test expr…)
+        …)
+  body…)
+```
+
+- If `body` succeeds its value is returned; the clauses are never consulted.
+- On error, `var` is bound to the error message string and clauses are
+  tested in order.  The expression of the first truthy test is returned.
+- `(#t …)` is the catch-all (`else` equivalent).
+- If no clause matches, the error is **re-raised**.
+
+```scheme
+; Swallow a missing-CID error, fall back to nil:
+(guard (e (#t nil))
+  (<bafyxxx>))
+
+; Log and continue:
+(guard (e (#t (display (string-append "load failed: " e))))
+  (<bafyxxx>))
+
+; Re-raise unexpected errors:
+(guard (e
+        ((string-contains e "not found") nil)
+        (#t (error e)))
+  (<bafyxxx>))
+```
+
 ---
 
 ## 4. ma primitives
@@ -146,6 +180,28 @@ If the path names a subtree rather than a leaf, a List of child path strings
 is returned.
 
 Dot-path verbs (`.path:verb`) are **not** supported inside Scheme expressions.
+
+### CID callables — head is `<bafy…>`
+
+A CID literal in function position fetches the CID content from IPFS and
+evaluates all top-level Scheme forms in the session environment.  This is
+equivalent to `(include <bafy…>)` but more concise.
+
+```scheme
+(<bafyxxx>)              ; load all defines from CID
+(<bafyxxx> arg1 arg2)    ; load CID, then call the last value as a lambda
+```
+
+Defines made inside the CID are available to all subsequent expressions in
+the same session.  When called from a `!eval` document, the fetch and all
+defines complete **before** the next line is executed (sequential guarantee).
+
+Wrap with `guard` to handle fetch or parse failures:
+
+```scheme
+(guard (e (#t (display (string-append "stdlib load failed: " e))))
+  (<bafyxxx>))
+```
 
 ### Actor messages — head starts with `@` or evaluates to `did:…`
 

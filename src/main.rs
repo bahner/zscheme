@@ -1,4 +1,3 @@
-mod config;
 mod context;
 mod executor;
 mod repl;
@@ -16,9 +15,9 @@ use tokio::task::spawn_local;
 use tracing::{info, warn};
 use zeroize::Zeroize;
 
-use crate::config::SchemeConfig;
-use crate::context::CliCtx;
+use crate::context::{CliCtx, Ctx};
 use crate::scheme::init_session_env;
+use ma_zscheme_yaml::SchemeConfig;
 
 const ZSCHEME_SLUG: &str = "zscheme";
 const DEFAULT_GATEWAY_URL: &str = "https://dweb.link";
@@ -112,7 +111,7 @@ async fn main() -> Result<()> {
     let signing_key_bytes = secrets.did_signing_key;
 
     let ctx = CliCtx::new(
-        scheme_config,
+        Box::new(scheme_config),
         our_did.clone(),
         signing_key_bytes,
         endpoint,
@@ -133,12 +132,15 @@ async fn main() -> Result<()> {
 }
 
 async fn async_main(
-    ctx: crate::context::Ctx,
+    ctx: std::rc::Rc<CliCtx>, // Rc<CliCtx> for poll_rpc_replies access
     script: Option<std::path::PathBuf>,
     poll_ms: u64,
 ) -> Result<()> {
     // Initialise session environment.
     init_session_env();
+
+    // Coerce to Ctx (= Rc<dyn SchemeCtx>) for the evaluator.
+    let scheme_ctx: Ctx = ctx.clone();
 
     // Start the RPC reply poll loop.
     let ctx_poll = ctx.clone();
@@ -152,9 +154,9 @@ async fn async_main(
 
     // Execute script or REPL, then close the endpoint cleanly.
     let result = if let Some(ref path) = script {
-        executor::run_file(path, ctx.clone()).await
+        executor::run_file(path, scheme_ctx).await
     } else {
-        repl::run_repl(ctx.clone()).await
+        repl::run_repl(scheme_ctx).await
     };
     ctx.close().await;
     result
@@ -168,6 +170,10 @@ fn load_secret_bundle(config: &Config) -> Result<SecretBundle> {
         .as_deref()
         .ok_or_else(|| anyhow!("secret_bundle_passphrase is required (set MA_SECRET_BUNDLE_PASSPHRASE or add it to {ZSCHEME_SLUG}.yaml)"))?;
     let bundle_path = config.effective_secret_bundle()?;
-    SecretBundle::load(&bundle_path, passphrase)
-        .with_context(|| format!("failed to load secret bundle from {}", bundle_path.display()))
+    SecretBundle::load(&bundle_path, passphrase).with_context(|| {
+        format!(
+            "failed to load secret bundle from {}",
+            bundle_path.display()
+        )
+    })
 }
