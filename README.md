@@ -1,4 +1,4 @@
-# zscheme
+# zscheme - Structure and Implementation of Systemic Chaos™
 
 Scheme scripting for the [間 (ma)](https://github.com/bahner/ma) distributed
 actor platform.
@@ -155,7 +155,8 @@ Save your definitions between sessions:
 ```
 
 Auto-load at login:
-```
+
+```zscheme
 .my.scheme.autoload: true
 ```
 
