@@ -49,8 +49,8 @@ pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
         }
     }
 
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("cannot bind {}", path.display()))?;
+    let listener =
+        UnixListener::bind(&path).with_context(|| format!("cannot bind {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -202,9 +202,16 @@ async fn handle_conn(
                 source,
                 isolated,
             } => {
-                let outcome =
-                    eval_request(&ctx, &eval_lock, &tx, id, &source, isolated, &mut isolated_env)
-                        .await;
+                let outcome = eval_request(
+                    &ctx,
+                    &eval_lock,
+                    &tx,
+                    id,
+                    &source,
+                    isolated,
+                    &mut isolated_env,
+                )
+                .await;
                 let _ = tx.send(Response::EvalResult { id, outcome });
             }
         }

@@ -140,7 +140,6 @@ async fn main() -> Result<()> {
         Config::from_args(&cli.ma, ZSCHEME_SLUG)?
     };
 
-
     let mut secrets = load_secret_bundle(&core_config)?;
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
@@ -186,7 +185,9 @@ async fn main() -> Result<()> {
     // ── Run in LocalSet (required for Rc<…> + LocalBoxFuture) ─────────────
     let local = tokio::task::LocalSet::new();
     if is_daemon {
-        local.run_until(daemon_main(ctx, img, cli.rpc_poll_ms)).await
+        local
+            .run_until(daemon_main(ctx, img, cli.rpc_poll_ms))
+            .await
     } else {
         local
             .run_until(async_main(ctx, script, cli.rpc_poll_ms))

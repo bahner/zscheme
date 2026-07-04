@@ -47,30 +47,30 @@ Redefine at any time:
 Read a value:
 
 ```scheme
-(.my.aliases.sky)             ; → did:ma:…
-(.my.config.colour.text)      ; → #00ff41
+(#/my/aliases/sky)             ; → did:ma:…
+(#/my/config/colour/text)      ; → #00ff41
 ```
 
 Write a value:
 
 ```scheme
-(.my.config.greeting: "hello")
+(#/my/config/greeting: "hello")
 ```
 
 Delete a subtree:
 
 ```scheme
-(.my.temp:)
+(#/my/temp:)
 ```
 
 Compose paths dynamically:
 
 ```scheme
 (define (alias name)
-  (string-append ".my.aliases." name))
+  (string-append "/my/aliases/" name))
 
 ; Now use it:
-((alias "sky"))               ; → resolves .my.aliases.sky
+((alias "sky"))               ; → resolves /my/aliases/sky
 ```
 
 ---
@@ -92,7 +92,7 @@ Raises an error on failure.
 When a config lookup returns a DID, you can use it as a function:
 
 ```scheme
-(define sky (.my.aliases.sky))
+(define sky (#/my/aliases/sky))
 (sky "#house:enter" "#room")      ; sends to did:ma:…#house:enter
 ```
 
@@ -115,13 +115,13 @@ The stdlib provides `string-split`, `string-join`, `map`, `filter`, `fold`,
 **Fetch once** (saves to local config):
 
 ```
-.my.doc.stdlib.ma:fetch <cid>
+/my/doc/stdlib/ma!fetch /ipfs/<cid>
 ```
 
 **Load into session** (run after each login, or put in a boot script):
 
 ```scheme
-(include ".my.doc.stdlib.ma")
+(include "/my/doc/stdlib/ma")
 ```
 
 After loading:
@@ -136,13 +136,13 @@ After loading:
 
 ## 5. Writing scripts
 
-Scripts are stored in any config path with a `.content` subkey. The `.ma`
-extension is conventional and enables Scheme syntax highlighting in the editor.
+Scripts are stored in any config path with a `content` subkey. The `/ma`
+suffix is conventional and enables Scheme syntax highlighting in the editor.
 
 **Create or edit:**
 
 ```
-.my.doc.greet.ma:edit
+/my/doc/greet/ma!edit
 ```
 
 Paste your script, then click **Save**.
@@ -150,13 +150,13 @@ Paste your script, then click **Save**.
 **Evaluate** (loads all `define` forms into session env):
 
 ```
-.my.doc.greet.ma:eval
+/my/doc/greet/ma!eval
 ```
 
 **Call a function from the script:**
 
 ```
-.my.doc.greet.ma:greet "alice"
+/my/doc/greet/ma!greet "alice"
 ```
 
 This is equivalent to: evaluate the script, then call `(greet "alice")`.
@@ -164,15 +164,15 @@ This is equivalent to: evaluate the script, then call `(greet "alice")`.
 **Share via IPFS:**
 
 ```
-.my.doc.greet.ma:publish @ma
-.my.doc.greet.ma:cid
+/my/doc/greet/ma!publish @ma
+/my/doc/greet/ma!cid
 ```
 
 Others load it with:
 
 ```
-.my.doc.greet.ma:fetch <cid>
-.my.doc.greet.ma:eval
+/my/doc/greet/ma!fetch /ipfs/<cid>
+/my/doc/greet/ma!eval
 ```
 
 ---
@@ -185,7 +185,7 @@ alias, and a room fragment in a single string.
 Store a navigation script (see `stdlib.ma` for `string-index`, `string-split`):
 
 ```scheme
-; .my.doc.world.ma — save with :edit, load with :eval
+; /my/doc/world/ma — save with !edit, load with !eval
 
 (define (parse-addr addr)
   (let* ((at      (string-index addr "@"))
@@ -214,7 +214,7 @@ Store a navigation script (see `stdlib.ma` for `string-index`, `string-split`):
 Call it:
 
 ```
-.my.doc.world.ma:enter "alice@sky#room"
+/my/doc/world/ma!enter "alice@sky#room"
 ```
 
 Or share as a URL:
@@ -249,7 +249,7 @@ Raise your own errors with `error`:
 (define (require-value v msg)
   (if (equal? v #f) (error msg) v))
 
-(require-value (.my.aliases.sky) "sky alias not set")
+(require-value (#/my/aliases/sky) "sky alias not set")
 ```
 
 ### `guard` — catching errors (R7RS-small)
@@ -260,17 +260,17 @@ The caught variable is bound to the error message **string**.
 ```scheme
 ; Silently ignore a missing CID:
 (guard (e (#t nil))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 
 ; Log the error and fall back to a default:
 (guard (e (#t (display (string-append "load failed: " e))))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 
 ; Handle specific errors differently, re-raise everything else:
 (guard (e
         ((string-contains e "not found") nil)
         (#t (error e)))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 ```
 
 `guard` is also useful around RPC calls that may time out:
@@ -289,7 +289,7 @@ script can continue:
 ```scheme
 ; Load a CID library — continue with a warning if unavailable:
 (guard (e (#t (display (string-append "warn: " e))))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 
 ; Subsequent lines only run if the guard above did not re-raise:
 (enter "@sky#room")
@@ -301,13 +301,13 @@ script can continue:
 
 ### Boot script
 
-Create `.my.doc.boot.ma` with your session initialisations and call:
+Create `/my/doc/boot/ma` with your session initialisations and call:
 
 ```scheme
-(include ".my.doc.boot.ma")
+(include "/my/doc/boot/ma")
 ```
 
-Or add to startup config — if `.my.ctx.use` is `"true"` at login, focus is
+Or add to startup config — if `/my/ctx/use` is `"true"` at login, focus is
 restored automatically.
 
 ### Named constants
@@ -315,7 +315,7 @@ restored automatically.
 ```scheme
 (define ROOM   "#room")
 (define HOUSE  "#house")
-(define SKY    (.my.aliases.sky))
+(define SKY    (#/my/aliases/sky))
 
 (rpc-send (string-append SKY HOUSE) ":enter" ROOM)
 ```
@@ -323,7 +323,7 @@ restored automatically.
 ### Combining results
 
 ```scheme
-(define sky (.my.aliases.sky))
+(define sky (#/my/aliases/sky))
 (define ticket (ok-val (rpc-send (string-append sky "#house") ":enter" "#room")))
 (rpc-send (string-append sky "#room") ":enter" ticket)
 ```

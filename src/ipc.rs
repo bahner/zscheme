@@ -73,8 +73,7 @@ pub fn socket_path() -> Result<PathBuf> {
         return Ok(runtime.join("zscheme.sock"));
     }
     let dir = base.data_dir().join("ma");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("cannot create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -87,8 +86,7 @@ pub fn socket_path() -> Result<PathBuf> {
 pub fn daemon_log_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().ok_or_else(|| anyhow!("cannot resolve home dir"))?;
     let dir = base.data_dir().join("ma");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("cannot create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     Ok(dir.join("zscheme-daemon.log"))
 }
 

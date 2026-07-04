@@ -18,7 +18,7 @@ use ma_zscheme::{
 pub type DisplaySink = Box<dyn Fn(&str)>;
 /// Shared evaluation context threaded through all recursive eval calls.
 pub struct CliCtx {
-    /// Dot-path registry — any DotRegistry backend (file, in-memory, IPFS, …).
+    /// Path registry — any DotRegistry backend (file, in-memory, IPFS, …).
     pub config: RefCell<Box<dyn DotRegistry>>,
     /// Our own DID (e.g. `did:ma:abc`)
     pub our_did: String,
@@ -128,7 +128,7 @@ impl SchemeCtx for CliCtx {
 
     fn eval_dot(&self, command: &str) -> Result<SchemeVal, SchemeErr> {
         let (path, op) = parse_dot_command(command)
-            .ok_or_else(|| SchemeErr::MaError(format!("bad dot command: {command}")))?;
+            .ok_or_else(|| SchemeErr::MaError(format!("bad path command: {command}")))?;
 
         match op {
             DotOp::Get => {
@@ -137,7 +137,7 @@ impl SchemeCtx for CliCtx {
                 } else {
                     let pairs = self.config.borrow().list(&path);
                     if pairs.is_empty() {
-                        Err(SchemeErr::MaError(format!("no value at .{path}")))
+                        Err(SchemeErr::MaError(format!("no value at /{path}")))
                     } else {
                         Ok(SchemeVal::List(
                             pairs.into_iter().map(|(k, _)| SchemeVal::Str(k)).collect(),
@@ -154,7 +154,7 @@ impl SchemeCtx for CliCtx {
                 Ok(SchemeVal::Nil)
             }
             DotOp::Meta { verb, args } => {
-                tracing::warn!("dot meta-verb .{path}!{verb} {args}: not yet supported in CLI");
+                tracing::warn!("path meta-verb /{path}!{verb} {args}: not yet supported in CLI");
                 Ok(SchemeVal::Nil)
             }
         }
@@ -182,13 +182,14 @@ impl SchemeCtx for CliCtx {
 
     // ── Async ─────────────────────────────────────────────────────────────
 
-    fn fetch_cid<'a>(&'a self, cid: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
+    fn fetch_path<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
+        let arg = path.trim_start_matches('/');
         let kubo_url = format!(
             "{}/api/v0/cat?arg={}",
             self.kubo_rpc_url.trim_end_matches('/'),
-            cid
+            path
         );
-        let gw_url = format!("{}/ipfs/{}", self.gateway_url.trim_end_matches('/'), cid);
+        let gw_url = format!("{}/{}", self.gateway_url.trim_end_matches('/'), arg);
         let http = self.http.clone();
         Box::pin(async move {
             match http.post(&kubo_url).send().await {

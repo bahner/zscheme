@@ -16,7 +16,7 @@ before normal dispatch. Results are spliced back as strings into the command.
 
 ```scheme
 ; Inline substitution — result becomes part of the command
-(.my.aliases.sky)#room:enter ((.my.aliases.ms)#house:enter #room)
+(#/my/aliases/sky)#room:enter ((#/my/aliases/ms)#house:enter #room)
 
 ; Standalone expressions
 (+ 7 5)                               ; → 12
@@ -29,10 +29,10 @@ before normal dispatch. Results are spliced back as strings into the command.
 - **Distributed primitives** — call any `did:ma:` actor directly from Scheme
 - **Session environment** — definitions persist across the login session
 - **`|` pipe threading** — compose RPC results and Scheme functions in a pipeline
-- **Scriptable docs** — store scripts in any dot-path, share via IPFS CID
-- **`.my.scheme!save`** — serialise your session env to a persistent image
+- **Scriptable docs** — store scripts in any `/my` path, share via IPFS CID
+- **`/my/scheme!save`** — serialise your session env to a persistent image
 - **Stdlib** — common functions in pure zscheme, loadable from IPFS
-- **`include`** — load a script by dot-path: `(include ".my.scheme")`
+- **`include`** — load a script by path: `(include "/my/scheme")`
 
 ---
 
@@ -84,9 +84,9 @@ It runs until logout/reboot or `zscheme --stop`.
 ### Config lookups
 
 ```scheme
-(.my.aliases.sky)                     ; returns stored DID
-(.my.config.colour.text)              ; returns colour string
-(.my.config.k: "value")              ; sets a config key
+(#/my/aliases/sky)                     ; returns stored DID
+(#/my/config/colour/text)              ; returns colour string
+(#/my/config/k: "value")              ; sets a config key
 ```
 
 ### Actor RPC
@@ -103,7 +103,7 @@ It runs until logout/reboot or `zscheme --stop`.
 ### Entering a world
 
 ```scheme
-(include ".my.doc.stdlib.ma")
+(include "/my/doc/stdlib/ma")
 
 (define (enter-world addr)
   (let* ((at      (string-index addr "@"))
@@ -149,15 +149,15 @@ Inside `(…)` expressions, `|` threads a value through a chain of functions:
 Save your definitions between sessions:
 
 ```
-.my.scheme!save   ; serialise session env to .my.scheme.content
-.my.scheme!edit   ; review and clean up
-.my.scheme!eval   ; reload after editing
+/my/scheme!save   ; serialise session env to /my/scheme/content
+/my/scheme!edit   ; review and clean up
+/my/scheme!eval   ; reload after editing
 ```
 
 Auto-load at login:
 
 ```zscheme
-.my.scheme.autoload: true
+/my/scheme/autoload: true
 ```
 
 ---
@@ -169,11 +169,11 @@ The stdlib (`stdlib.ma`) provides `string-split`, `string-join`, `map`,
 
 ```
 ; In zion:
-.my.doc.stdlib.ma!fetch <cid>   ; fetch from IPFS by CID
-.my.doc.stdlib.ma!eval          ; evaluate into session environment
+/my/doc/stdlib/ma!fetch /ipfs/<cid>   ; fetch from IPFS by CID
+/my/doc/stdlib/ma!eval                ; evaluate into session environment
 
 ; From inside a Scheme expression:
-(include ".my.doc.stdlib.ma")
+(include "/my/doc/stdlib/ma")
 ```
 
 ---

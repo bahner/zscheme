@@ -28,18 +28,18 @@ Each `(…)` span is evaluated as a Scheme expression; the result is substituted
 as a string at that position. The remaining text is dispatched normally.
 
 ```
-.path            → dot-command (config get/set/delete)
-.path:func args  → Scheme function call (dispatches to .content)
-.path!verb args  → system/side-effect operation (edit, eval, publish, save, …)
+.path            → dot-command (control command: .ma, .use, .help, …)
+#/my/path        → path atom (config get/set/delete, inside Scheme expressions)
+#/ipfs/<cid>     → remote fetch (read-only, inside Scheme expressions)
 @                → actor message (RPC)
 (                → Scheme expression
 val | (f arg)    → pipe / threading (inside expressions)
 ```
 
-All three dot/actor/scheme forms may appear in a single line:
+Both path/actor/scheme forms may appear in a single line:
 
 ```
-(.my.aliases.sky)#room:enter ((.my.aliases.ms)#house:enter #room)
+(#/my/aliases/sky)#room:enter ((#/my/aliases/ms)#house:enter #room)
 ```
 
 The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
@@ -57,7 +57,7 @@ The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
 | Nil | `()`, `nil` | Empty list / null |
 | List | `(1 2 3)` | Proper list |
 | Lambda | `(lambda (x) x)` | Closure |
-| MaPath | `.my.aliases.sky` | Dot-path reference |
+| MaPath | `#/my/aliases/sky` | Local config path reference (`/my`, `/ctx`) |
 | MaActor | `@sky#house` | Actor target |
 
 Fragment atoms such as `#room` and `#house:enter` are treated as strings.
@@ -145,19 +145,19 @@ to the error message **string**.
 - If no clause matches, the error is **re-raised**.
 
 ```scheme
-; Swallow a missing-CID error, fall back to nil:
+; Swallow a missing-content error, fall back to nil:
 (guard (e (#t nil))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 
 ; Log and continue:
 (guard (e (#t (display (string-append "load failed: " e))))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 
 ; Re-raise unexpected errors:
 (guard (e
         ((string-contains e "not found") nil)
         (#t (error e)))
-  (<bafyxxx>))
+  (#/ipfs/bafyxxx))
 ```
 
 ---
@@ -167,40 +167,47 @@ to the error message **string**.
 The evaluator recognises two dispatch classes based on the head of a list
 form. These use the **existing ma grammar** — no new function names.
 
-### Dot-path commands — head starts with `.`
+### Path atoms — head starts with `#/`
+
+`#/my/…` and `#/ctx/…` address local config (read-write); `#/ipfs/…`,
+`#/ipns/…`, and `#/ipld/…` fetch remote content (read-only — no arguments
+accepted). The `#/` sigil avoids colliding with the `/` division builtin.
 
 ```scheme
-(.my.aliases.sky)           ; get leaf value → String
-(.my.doc.notes.content)     ; get leaf value
-(.my.config.k: "v")         ; set leaf       → Nil
-(.my.aliases.old:)          ; delete subtree → Nil
+(#/my/aliases/sky)           ; get leaf value → String
+(#/my/doc/notes/content)     ; get leaf value
+(#/my/config/k: "v")         ; set leaf       → Nil
+(#/my/aliases/old:)          ; delete subtree → Nil
+
+(#/ipfs/bafyxxx)             ; fetch CID content → String
+(#/ipns/k51xxx)              ; resolve + fetch IPNS content → String
 ```
 
 If the path names a subtree rather than a leaf, a List of child path strings
 is returned.
 
-Dot-path verbs (`.path:verb`) are **not** supported inside Scheme expressions.
+Path verbs (`#/path!verb`) are **not** supported inside Scheme expressions.
 
-### CID callables — head is `<bafy…>`
-
-A CID literal in function position fetches the CID content from IPFS and
-evaluates all top-level Scheme forms in the session environment.  This is
-equivalent to `(include <bafy…>)` but more concise.
+To load definitions from a CID (equivalent to the old `<bafy…>`
+head-position callable), use the `include` builtin — it accepts either an
+unquoted path atom or a quoted path string:
 
 ```scheme
-(<bafyxxx>)              ; load all defines from CID
-(<bafyxxx> arg1 arg2)    ; load CID, then call the last value as a lambda
+(include #/ipfs/bafyxxx)         ; fetch + eval all top-level defines
+(include "/ipfs/bafyxxx")        ; same, quoted string form
+(include "/my/doc/stdlib")       ; load from local config
 ```
 
-Defines made inside the CID are available to all subsequent expressions in
-the same session.  When called from a `!eval` document, the fetch and all
-defines complete **before** the next line is executed (sequential guarantee).
+Defines made inside the included content are available to all subsequent
+expressions in the same session.  When called from a `!eval` document, the
+fetch and all defines complete **before** the next line is executed
+(sequential guarantee).
 
 Wrap with `guard` to handle fetch or parse failures:
 
 ```scheme
 (guard (e (#t (display (string-append "stdlib load failed: " e))))
-  (<bafyxxx>))
+  (include #/ipfs/bafyxxx))
 ```
 
 ### Actor messages — head starts with `@` or evaluates to `did:…`
@@ -214,7 +221,7 @@ When the head evaluates to a `did:…` string and the first argument starts
 with `#`, the argument is appended without a space to form the fragment address:
 
 ```scheme
-(define sky (.my.aliases.sky))        ; → "did:ma:abc"
+(define sky (#/my/aliases/sky))       ; → "did:ma:abc"
 (sky "#room:enter" ticket)            ; → sends to did:ma:abc#room:enter
 ```
 
@@ -412,21 +419,21 @@ the duration of the login session:
 To persist values across sessions, write to config:
 
 ```scheme
-(.my.config.counter: (number->string (+ 1 (string->number (.my.config.counter)))))
+(#/my/config/counter: (number->string (+ 1 (string->number (#/my/config/counter)))))
 ```
 
-### Scripting with `.my.doc`
+### Scripting with `/my/doc`
 
-Scripts may be stored in any config path with a `.content` subkey and
-evaluated with `:eval`:
+Scripts may be stored in any config path with a `content` subkey and
+evaluated with `!eval`:
 
 ```
-.my.doc.boot.ma:edit      ; write in CodeMirror (syntax-highlighted for .ma)
-.my.doc.boot.ma:eval      ; evaluate into session environment
-.my.doc.boot.ma:publish @ma  ; publish to IPFS
+/my/doc/boot/ma!edit      ; write in CodeMirror (syntax-highlighted for .ma)
+/my/doc/boot/ma!eval      ; evaluate into session environment
+/my/doc/boot/ma!publish @ma  ; publish to IPFS
 ```
 
-Path names ending in `.ma` open in CodeMirror with Scheme syntax highlighting.
+Path names ending in `/ma` open in CodeMirror with Scheme syntax highlighting.
 
 ---
 
@@ -447,10 +454,10 @@ Avoid Scheme expressions inside sync batches.
 
 ### System operations (`!verb`) not callable from Scheme
 
-`.path!verb` forms (`!edit`, `!eval`, `!save`, `!publish`, etc.) are
+`/path!verb` forms (`!edit`, `!eval`, `!save`, `!publish`, etc.) are
 side-effect operations requiring the full terminal dispatch context. They
 cannot be called from within `(…)` Scheme expressions. Use them from the
 normal command line.
 
-Dot-path config operations (`Get`, `Set`, `Delete`) remain available from
-Scheme via the `.path` MaPath form.
+Local config operations (`Get`, `Set`, `Delete`) remain available from
+Scheme via the `#/my` / `#/ctx` MaPath form.
