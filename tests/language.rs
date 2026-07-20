@@ -219,7 +219,7 @@ fn functional_scheme_programs_pass() {
         .unwrap()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("z"))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zcm"))
         .collect();
 
     let functional_dir = Path::new("tests/functional");
@@ -229,14 +229,14 @@ fn functional_scheme_programs_pass() {
                 .unwrap()
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
-                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("z")),
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zcm")),
         );
     }
 
     paths.sort();
     assert!(
         !paths.is_empty(),
-        "expected at least one functional .z test"
+        "expected at least one functional .zcm test"
     );
 
     for path in paths {

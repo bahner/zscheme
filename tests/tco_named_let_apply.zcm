@@ -1,6 +1,6 @@
 ; zscheme regression tests — TCO, named let, apply
 ;
-; Run: zscheme tests/tco_named_let_apply.z
+; Run: zscheme tests/tco_named_let_apply.zcm
 ; All (assert …) forms must pass silently.
 
 ; ── named let ────────────────────────────────────────────────────────────────
