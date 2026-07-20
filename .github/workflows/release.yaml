@@ -1,0 +1,197 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for CI to pass for this tag
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const workflowName = "CI";
+            const tag = "${{ steps.tag.outputs.name }}";
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const maxAttempts = 40;
+            const delayMs = 15000;
+
+            for (let i = 1; i <= maxAttempts; i++) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner,
+                repo,
+                event: "push",
+                per_page: 100,
+              });
+
+              const ciRun = runs.find((r) => r.name === workflowName && r.head_branch === tag);
+
+              if (!ciRun) {
+                core.info(`Attempt ${i}/${maxAttempts}: CI run not found yet for tag ${tag}.`);
+                await sleep(delayMs);
+                continue;
+              }
+
+              core.info(
+                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} status=${ciRun.status} conclusion=${ciRun.conclusion}`
+              );
+
+              if (ciRun.status !== "completed") {
+                await sleep(delayMs);
+                continue;
+              }
+
+              if (ciRun.conclusion !== "success") {
+                core.setFailed(`CI workflow concluded with '${ciRun.conclusion}'. Aborting release.`);
+                return;
+              }
+
+              core.info("CI passed for this tag. Proceeding with release.");
+              return;
+            }
+
+            core.setFailed("Timed out waiting for CI workflow completion.");
+
+  build:
+    name: ${{ matrix.target }}
+    needs: wait-for-ci
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: zscheme
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: zscheme.exe
+            ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: zscheme
+            ext: ""
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            binary: zscheme
+            ext: ""
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.wait-for-ci.outputs.tag }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+             "dist/zscheme-${{ needs.wait-for-ci.outputs.tag }}-${{ matrix.target }}${{ matrix.ext }}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zscheme-${{ matrix.target }}
+          path: dist/
+
+  release:
+    name: GitHub Release
+    needs:
+      - wait-for-ci
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.wait-for-ci.outputs.tag }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Resolve release kind
+        id: release_kind
+        shell: bash
+        run: |
+          tag="${{ needs.wait-for-ci.outputs.tag }}"
+          version="${tag##*v}"
+
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.wait-for-ci.outputs.tag }}
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ steps.release_kind.outputs.prerelease }}
