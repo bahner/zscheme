@@ -29,7 +29,7 @@ as a string at that position. The remaining text is dispatched normally.
 
 ```
 .path            → dot-command (control command: .ma, .use, .help, …)
-#/my/path        → path atom (config get/set/delete, inside Scheme expressions)
+.my.path         → dot path atom (config get/set/delete, inside Scheme expressions)
 #/ipfs/<cid>     → remote fetch (read-only, inside Scheme expressions)
 @                → actor message (RPC)
 (                → Scheme expression
@@ -39,7 +39,7 @@ val | (f arg)    → pipe / threading (inside expressions)
 Both path/actor/scheme forms may appear in a single line:
 
 ```
-(#/my/aliases/sky)#room:enter ((#/my/aliases/ms)#house:enter #room)
+(.my.aliases.sky)#room:enter ((.my.aliases.ms)#house:enter #room)
 ```
 
 The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
@@ -58,7 +58,7 @@ The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
 | List | `(1 2 3)` | Proper list |
 | Map | `(make-map "name" "Ada")` | String-keyed associative map |
 | Lambda | `(lambda (x) x)` | Closure |
-| MaPath | `#/my/aliases/sky` | Local config path reference (`/my`, `/ctx`) |
+| MaPath | `.my.aliases.sky` | Local config path reference (`.my`, `.ctx`) |
 | MaActor | `@sky#house` | Actor target |
 
 Fragment atoms such as `#room` and `#house:enter` are treated as strings.
@@ -170,15 +170,15 @@ form. These use the **existing ma grammar** — no new function names.
 
 ### Path atoms — head starts with `#/`
 
-`#/my/…` and `#/ctx/…` address local config (read-write); `#/ipfs/…`,
+`.my…` and `.ctx…` address local config (read-write); `#/ipfs/…`,
 `#/ipns/…`, and `#/ipld/…` fetch remote content (read-only — no arguments
 accepted). The `#/` sigil avoids colliding with the `/` division builtin.
 
 ```scheme
-(#/my/aliases/sky)           ; get leaf value → String
-(#/my/doc/notes/content)     ; get leaf value
-(#/my/config/k: "v")         ; set leaf       → Nil
-(#/my/aliases/old:)          ; delete subtree → Nil
+(.my.aliases.sky)            ; get leaf value → String
+(.my.doc.notes.content)      ; get leaf value
+(.my.config.k: "v")          ; set leaf       → Nil
+(.my.aliases.old:)           ; delete subtree → Nil
 
 (#/ipfs/bafyxxx)             ; fetch CID content → String
 (#/ipns/k51xxx)              ; resolve + fetch IPNS content → String
@@ -196,7 +196,7 @@ unquoted path atom or a quoted path string:
 ```scheme
 (include #/ipfs/bafyxxx)         ; fetch + eval all top-level defines
 (include "/ipfs/bafyxxx")        ; same, quoted string form
-(include "/my/doc/stdlib")       ; load from local config
+(include ".my.doc.stdlib")        ; load from local config
 ```
 
 Defines made inside the included content are available to all subsequent
@@ -222,7 +222,7 @@ When the head evaluates to a `did:…` string and the first argument starts
 with `#`, the argument is appended without a space to form the fragment address:
 
 ```scheme
-(define sky (#/my/aliases/sky))       ; → "did:ma:abc"
+(define sky (.my.aliases.sky))        ; → "did:ma:abc"
 (sky "#room:enter" ticket)            ; → sends to did:ma:abc#room:enter
 ```
 
@@ -456,21 +456,20 @@ the duration of the login session:
 To persist values across sessions, write to config:
 
 ```scheme
-(#/my/config/counter: (number->string (+ 1 (string->number (#/my/config/counter)))))
+(.my.config.counter: (number->string (+ 1 (string->number (.my.config.counter)))))
 ```
 
-### Scripting with `/my/doc`
+### Scripting with `.my.doc`
 
-Scripts may be stored in any config path with a `content` subkey and
-evaluated with `!eval`:
+Scripts may be stored as `.my.doc.<name>` documents and evaluated with `!eval`.
+A `.ma` ending is just a document-name convention used in examples; there is no
+`/ma` path suffix or Scheme syntax highlighting behavior.
 
 ```
-/my/doc/boot/ma!edit      ; write in CodeMirror (syntax-highlighted for .ma)
-/my/doc/boot/ma!eval      ; evaluate into session environment
-/my/doc/boot/ma!publish @ma  ; publish to IPFS
+.my.doc.boot.ma!edit         ; write in CodeMirror
+.my.doc.boot.ma!eval         ; evaluate into session environment
+.my.doc.boot.ma!publish @ma  ; publish to IPFS
 ```
-
-Path names ending in `/ma` open in CodeMirror with Scheme syntax highlighting.
 
 ---
 
@@ -497,4 +496,4 @@ cannot be called from within `(…)` Scheme expressions. Use them from the
 normal command line.
 
 Local config operations (`Get`, `Set`, `Delete`) remain available from
-Scheme via the `#/my` / `#/ctx` MaPath form.
+Scheme via the `.my` / `.ctx` MaPath form.

@@ -1,0 +1,29 @@
+; Functional zscheme language test: core forms and procedures.
+
+(assert (= (+ 1 2 3 4) 10))
+(assert (= (- 10 3 2) 5))
+(assert (= (* 2 3 4) 24))
+(assert (= (/ (/ 24 3) 2) 4))
+
+(define (square x) (* x x))
+(assert (= (square 9) 81))
+
+(define make-adder
+  (lambda (n)
+    (lambda (x) (+ x n))))
+(define add7 (make-adder 7))
+(assert (= (add7 35) 42))
+
+(assert (= (let ((x 2) (y 5)) (+ x y)) 7))
+(assert (= (let* ((x 2) (y (+ x 5))) (* x y)) 14))
+
+(define (fib n)
+  (letrec ((loop (lambda (i a b)
+                   (if (= i 0) a (loop (- i 1) b (+ a b))))))
+    (loop n 0 1)))
+(assert (= (fib 10) 55))
+
+(assert (equal? (cond ((> 1 2) "bad") ((< 1 2) "ok") (else "bad")) "ok"))
+(assert (equal? (guard (e (#t "caught")) (error "boom")) "caught"))
+
+"core-ok"

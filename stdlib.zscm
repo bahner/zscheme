@@ -5,11 +5,11 @@
 ; (string-index, substring, string-length, string-append, cons,
 ;  car, cdr, null?, pair?, =, <, >, mod, not, display, error).
 ;
-; Load with: (include "/my/scheme/stdlib/ma")
-; Or from terminal: /my/scheme/stdlib/ma!eval
+; Load with: (include ".my.scheme.stdlib.ma")
+; Or from terminal: .my.scheme.stdlib.ma!eval
 ;
-; Publish to IPFS: /my/scheme/stdlib/ma!publish @ma
-; Then share the CID so others can: /my/scheme/stdlib/ma!fetch /ipfs/<cid>
+; Publish to IPFS: .my.scheme.stdlib.ma!publish @ma
+; Then share the CID so others can: .my.scheme.stdlib.ma!fetch /ipfs/<cid>
 
 ; ── List aliases ──────────────────────────────────────────────────────────────
 

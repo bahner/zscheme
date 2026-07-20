@@ -3,14 +3,14 @@
 ; High-level helpers for connecting to a ma runtime.
 ; Load stdlib first, then this file:
 ;
-;   (include "/my/scheme/stdlib/ma")
-;   (include "/my/scheme/runtime/ma")
+;   (include ".my.scheme.stdlib.ma")
+;   (include ".my.scheme.runtime.ma")
 ;
-; Save to /my/scheme/runtime/ma:
-;   /my/scheme/runtime/ma!edit
+; Save to .my.scheme.runtime.ma:
+;   .my.scheme.runtime.ma!edit
 ;
-; Publish:   /my/scheme/runtime/ma!publish @ma
-; Fetch:     /my/scheme/runtime/ma!fetch /ipfs/<cid>
+; Publish:   .my.scheme.runtime.ma!publish @ma
+; Fetch:     .my.scheme.runtime.ma!fetch /ipfs/<cid>
 
 ; ── Address parsing ───────────────────────────────────────────────────────────
 ;

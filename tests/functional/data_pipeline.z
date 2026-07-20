@@ -1,0 +1,23 @@
+; Functional zscheme test: list processing, maps, and immutable updates.
+
+(define tasks
+  (list (make-map "title" "water garden" "done" #t "points" 2)
+        (make-map "title" "write note" "done" #f "points" 3)
+        (make-map "title" "ship tests" "done" #t "points" 5)))
+
+(define (done? task) (map-ref task "done"))
+(define completed (filter done? tasks))
+(assert (= (length completed) 2))
+
+(define (points task total)
+  (+ total (map-ref task "points")))
+
+(assert (= (fold points 0 completed) 7))
+
+(define first-updated (map-set (car tasks) "points" 4))
+(assert (= (map-ref first-updated "points") 4))
+(assert (= (map-ref (car tasks) "points") 2))
+
+(assert (equal? (map-keys (make-map "b" 2 "a" 1)) '("a" "b")))
+
+"data-pipeline-ok"

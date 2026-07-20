@@ -1,0 +1,24 @@
+; Functional zscheme test: store scripts in .my docs and include them.
+
+(.my.doc.math: "
+(define (sum-list xs)
+  (fold + 0 xs))
+
+(define (average xs)
+  (/ (sum-list xs) (length xs)))
+
+(define (require-positive n)
+  (if (> n 0) n (error \"not positive\")))
+")
+
+(include ".my.doc.math")
+
+(assert (= (sum-list '(4 8 12)) 24))
+(assert (= (average '(4 8 12)) 8))
+(assert (= (require-positive 9) 9))
+(assert (equal?
+          (guard (e (#t (string-append "caught: " e)))
+            (require-positive 0))
+          "caught: not positive"))
+
+"session-docs-ok"

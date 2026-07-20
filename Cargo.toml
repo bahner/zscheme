@@ -20,8 +20,8 @@ ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 ma-core = { version = "0.12", default-features = false, features = ["config", "iroh"] }
-ma-zscheme = "0.3"
-ma-zscheme-yaml = "0.3"
+ma-zscheme = { version = "0.3", path = "../rust-ma-zscheme/ma-zscheme" }
+ma-zscheme-yaml = { version = "0.3", path = "../rust-ma-zscheme/ma-zscheme-yaml" }
 directories = "5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rustyline = "14"

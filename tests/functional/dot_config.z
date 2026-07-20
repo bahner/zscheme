@@ -1,0 +1,15 @@
+; Functional zscheme test: zion-style .my config notation.
+
+(.my.config.greeting: "hello")
+(assert (equal? (.my.config.greeting) "hello"))
+
+(.my.doc.math: "(define (double x) (* x 2))")
+(include ".my.doc.math")
+(assert (= (double 21) 42))
+
+(.my.config.greeting:)
+(assert (equal?
+          (guard (e (#t "missing")) (.my.config.greeting))
+          "missing"))
+
+"dot-config-ok"

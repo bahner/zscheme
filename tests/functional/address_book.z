@@ -1,0 +1,21 @@
+; Functional zscheme test: parse ma world addresses and build actor targets.
+
+(define (parse-address addr)
+  (let* ((at (string-index addr "@"))
+         (hash (string-index addr "#"))
+         (alias (substring addr 0 at))
+         (runtime (string-append "@" (substring addr (+ at 1) hash)))
+         (room (substring addr hash (string-length addr))))
+    (make-map "alias" alias "runtime" runtime "room" room)))
+
+(define parsed (parse-address "alice@sky#garden"))
+(assert (equal? (map-ref parsed "alias") "alice"))
+(assert (equal? (map-ref parsed "runtime") "@sky"))
+(assert (equal? (map-ref parsed "room") "#garden"))
+
+(define (room-target parsed)
+  (string-append (map-ref parsed "runtime") (map-ref parsed "room")))
+
+(assert (equal? (room-target parsed) "@sky#garden"))
+
+"address-book-ok"
