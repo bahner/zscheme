@@ -2,7 +2,7 @@
 //!
 //! Owns the single iroh endpoint for the user's identity and evaluates
 //! Scheme source submitted by frontend clients over a Unix domain socket.
-//! This guarantees exactly one iroh NodeId per identity regardless of how
+//! This guarantees exactly one iroh `NodeId` per identity regardless of how
 //! many concurrent `zscheme` frontends are running.
 //!
 //! Evaluations are serialized FIFO across all connections (the Scheme
@@ -33,6 +33,11 @@ use crate::scheme::{SchemeErr, SchemeVal};
 ///
 /// Returns when a client sends `Stop` or the process receives
 /// SIGINT/SIGTERM. The caller is responsible for closing the endpoint.
+///
+/// # Errors
+///
+/// Returns an error if the daemon socket cannot be claimed or bound, signal
+/// handlers cannot be installed, or startup image access fails.
 pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
     let path = socket_path()?;
     claim_socket(&path).await?;
@@ -264,6 +269,7 @@ async fn eval_request(
 }
 
 /// Format a `SchemeErr` the same way the standalone REPL does.
+#[must_use]
 pub fn format_scheme_err(e: &SchemeErr) -> String {
     match e {
         SchemeErr::Runtime(msg) => format!("error: {msg}"),

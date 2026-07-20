@@ -35,29 +35,34 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Connect to the daemon, auto-spawning it if needed, and perform the
     /// version handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket path cannot be resolved, the daemon
+    /// cannot be started or reached, or the version handshake fails.
     pub async fn connect_or_spawn(isolated: bool) -> Result<Self> {
         let path = socket_path()?;
-        let stream = match UnixStream::connect(&path).await {
-            Ok(s) => s,
-            Err(_) => {
-                spawn_daemon()?;
-                let mut stream = None;
-                for _ in 0..SPAWN_RETRIES {
-                    tokio::time::sleep(SPAWN_RETRY_DELAY).await;
-                    if let Ok(s) = UnixStream::connect(&path).await {
-                        stream = Some(s);
-                        break;
-                    }
+        let stream = if let Ok(stream) = UnixStream::connect(&path).await {
+            stream
+        } else {
+            spawn_daemon()?;
+            let mut stream = None;
+            for _ in 0..SPAWN_RETRIES {
+                tokio::time::sleep(SPAWN_RETRY_DELAY).await;
+                if let Ok(s) = UnixStream::connect(&path).await {
+                    stream = Some(s);
+                    break;
                 }
-                stream.ok_or_else(|| {
-                    anyhow!(
-                        "zscheme daemon failed to start — check {}",
-                        daemon_log_path()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|_| "the daemon log".to_string())
-                    )
-                })?
             }
+            stream.ok_or_else(|| {
+                anyhow!(
+                    "zscheme daemon failed to start — check {}",
+                    daemon_log_path().map_or_else(
+                        |_| "the daemon log".to_string(),
+                        |p| p.display().to_string()
+                    )
+                )
+            })?
         };
 
         let mut client = Self {
@@ -96,6 +101,11 @@ impl DaemonClient {
     ///
     /// Outer `Err` = IPC failure; inner `Err` = Scheme evaluation error
     /// (pre-formatted message).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing the request fails, the daemon closes the
+    /// connection unexpectedly, or a response frame cannot be decoded.
     pub async fn eval(&mut self, source: &str) -> Result<Result<Option<String>, String>> {
         let id = self.next_id;
         self.next_id += 1;
@@ -132,6 +142,11 @@ impl DaemonClient {
 // ── Entry points ───────────────────────────────────────────────────────────
 
 /// Default frontend entry point: run a script or the REPL against the daemon.
+///
+/// # Errors
+///
+/// Returns an error if the daemon connection fails, the script cannot be read,
+/// IPC fails, or Scheme evaluation reports an error.
 pub async fn run(script: Option<PathBuf>, isolated: bool) -> Result<()> {
     let client = DaemonClient::connect_or_spawn(isolated).await?;
 
@@ -153,6 +168,11 @@ pub async fn run(script: Option<PathBuf>, isolated: bool) -> Result<()> {
 }
 
 /// Ask a running daemon to shut down.
+///
+/// # Errors
+///
+/// Returns an error if the daemon socket cannot be resolved or IPC with the
+/// running daemon fails.
 pub async fn stop() -> Result<()> {
     let Some(mut stream) = connect_existing().await? else {
         eprintln!("no zscheme daemon running");
@@ -169,6 +189,11 @@ pub async fn stop() -> Result<()> {
 }
 
 /// Reset the daemon's shared session environment.
+///
+/// # Errors
+///
+/// Returns an error if the daemon socket cannot be resolved, IPC fails, or the
+/// daemon closes the connection before acknowledging the reset.
 pub async fn reset() -> Result<()> {
     let Some(mut stream) = connect_existing().await? else {
         eprintln!("no zscheme daemon running — nothing to reset");
@@ -186,6 +211,11 @@ pub async fn reset() -> Result<()> {
 
 /// Save the daemon's session environment as Scheme source to `file`,
 /// or to stdout when no file is given.
+///
+/// # Errors
+///
+/// Returns an error if no daemon is running, IPC fails, the daemon closes the
+/// connection before sending the dump, or the output file cannot be written.
 pub async fn save(file: Option<PathBuf>) -> Result<()> {
     let Some(mut stream) = connect_existing().await? else {
         bail!("no zscheme daemon running — nothing to save");

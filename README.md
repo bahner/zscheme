@@ -164,8 +164,11 @@ Auto-load at login:
 
 ## Loading the stdlib
 
-The stdlib (`stdlib.ma`) provides `string-split`, `string-join`, `map`,
-`filter`, `fold`, `take`, `drop`, `member`, `contains?`, and more.
+The stdlib (`stdlib.ma`) provides list helpers such as `map`, `filter`,
+`fold`, `take`, `drop`, `member`, and `contains?`; string helpers such as
+`string-split` and `string-join`; and associative map helpers such as
+`make-map`, `map-ref`, `map-set`, `map-delete`, `map-keys`, `map-values`,
+`map->alist`, and `alist->map`.
 
 ```
 ; In zion:
@@ -187,4 +190,4 @@ The stdlib (`stdlib.ma`) provides `string-split`, `string-join`, `map`,
 | [`HANDBOOK.md`](HANDBOOK.md) | Practical user handbook |
 
 The formal specification lives in the ma-spec repository:
-[ma-scheme-v1.md](https://github.com/bahner/ma-spec/blob/main/zscheme/ma-scheme-v1.md).
+[zscheme-v1.md](https://github.com/bahner/ma-spec/blob/main/zscheme/zscheme-v1.md).

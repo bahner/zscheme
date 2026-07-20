@@ -56,6 +56,7 @@ The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
 | Boolean | `#t`, `#f` | |
 | Nil | `()`, `nil` | Empty list / null |
 | List | `(1 2 3)` | Proper list |
+| Map | `(make-map "name" "Ada")` | String-keyed associative map |
 | Lambda | `(lambda (x) x)` | Closure |
 | MaPath | `#/my/aliases/sky` | Local config path reference (`/my`, `/ctx`) |
 | MaActor | `@sky#house` | Actor target |
@@ -273,6 +274,42 @@ failure raises `SchemeErr`. Use `rpc-send` for explicit tuple handling.
 | `(cdr lst)` | Rest (tail) |
 | `(null? v)` | True for `()` and nil |
 | `(pair? v)` | True for non-empty list |
+
+### Maps
+
+Maps are associative values with string keys and arbitrary serialisable
+zscheme values. They have no literal syntax; construct them with `make-map`.
+Map update helpers return a new map value.
+
+| Function | Description |
+|---|---|
+| `(map? v)` | True for maps |
+| `(make-map key value …)` | Construct a map from alternating string keys and values |
+| `(map-ref map key)` | Return the value at `key`, or `#f` if absent |
+| `(map-ref map key default)` | Return the value at `key`, or `default` if absent |
+| `(map-set map key value)` | Return a new map with `key` set to `value` |
+| `(map-delete map key)` | Return a new map without `key` |
+| `(map-has-key? map key)` | True if `key` exists in the map |
+| `(map-keys map)` | Return a list of keys |
+| `(map-values map)` | Return a list of values |
+| `(map->alist map)` | Convert a map to `((key value) …)` form |
+| `(alist->map alist)` | Convert `((key value) …)` form to a map |
+
+```scheme
+(define room (make-map "name" "Garden" "players" 3))
+(map-ref room "name")                    ; → "Garden"
+(map-ref room "missing" "fallback")      ; → "fallback"
+(map-has-key? room "players")            ; → #t
+
+(define updated (map-set room "players" 4))
+(map-ref updated "players")              ; → 4
+(map-ref room "players")                 ; → 3
+
+(map->alist updated)                      ; → (("name" "Garden") ("players" 4))
+```
+
+When maps are sent as RPC arguments, they are encoded as CBOR maps. Keys must
+be strings.
 
 ### Type predicates
 

@@ -67,6 +67,11 @@ pub enum Response {
 ///
 /// Prefers `$XDG_RUNTIME_DIR/zscheme.sock`; falls back to
 /// `<data dir>/ma/zscheme.sock` when no runtime dir is available.
+///
+/// # Errors
+///
+/// Returns an error if the home/data directory cannot be resolved or the
+/// fallback socket directory cannot be created.
 pub fn socket_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().ok_or_else(|| anyhow!("cannot resolve home dir"))?;
     if let Some(runtime) = base.runtime_dir() {
@@ -83,6 +88,11 @@ pub fn socket_path() -> Result<PathBuf> {
 }
 
 /// Path to the daemon log file (stdout/stderr of auto-spawned daemons).
+///
+/// # Errors
+///
+/// Returns an error if the home/data directory cannot be resolved or the log
+/// directory cannot be created.
 pub fn daemon_log_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().ok_or_else(|| anyhow!("cannot resolve home dir"))?;
     let dir = base.data_dir().join("ma");
@@ -93,6 +103,11 @@ pub fn daemon_log_path() -> Result<PathBuf> {
 // ── Framing ────────────────────────────────────────────────────────────────
 
 /// Write one CBOR frame (length-prefixed) to `writer`.
+///
+/// # Errors
+///
+/// Returns an error if CBOR encoding fails, the frame is too large, or writing
+/// to the stream fails.
 pub async fn write_frame<W, T>(writer: &mut W, msg: &T) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
@@ -108,6 +123,11 @@ where
 }
 
 /// Read one CBOR frame from `reader`. Returns `Ok(None)` on clean EOF.
+///
+/// # Errors
+///
+/// Returns an error if reading fails, the frame exceeds the maximum size, or
+/// CBOR decoding fails.
 pub async fn read_frame<R, T>(reader: &mut R) -> Result<Option<T>>
 where
     R: AsyncReadExt + Unpin,

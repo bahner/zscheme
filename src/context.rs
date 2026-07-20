@@ -18,14 +18,14 @@ use ma_zscheme::{
 pub type DisplaySink = Box<dyn Fn(&str)>;
 /// Shared evaluation context threaded through all recursive eval calls.
 pub struct CliCtx {
-    /// Path registry — any DotRegistry backend (file, in-memory, IPFS, …).
+    /// Path registry — any `DotRegistry` backend (file, in-memory, IPFS, ...).
     pub config: RefCell<Box<dyn DotRegistry>>,
     /// Our own DID (e.g. `did:ma:abc`)
     pub our_did: String,
     /// Ed25519 signing key bytes for outgoing messages.
     pub signing_key_bytes: [u8; 32],
     /// iroh endpoint for sending/receiving messages.
-    pub endpoint: RefCell<Box<dyn ma_core::MaEndpoint>>,
+    pub endpoint: tokio::sync::Mutex<Box<dyn ma_core::MaEndpoint>>,
     /// DID resolver for looking up actor endpoints.
     pub resolver: Rc<IpfsGatewayResolver>,
     /// Pending RPC reply senders keyed by message id.
@@ -44,6 +44,26 @@ pub struct CliCtx {
     pub display_sink: RefCell<Option<DisplaySink>>,
 }
 
+/// Inputs needed to construct a [`CliCtx`].
+pub struct CliCtxInit {
+    /// Path registry backend.
+    pub config: Box<dyn DotRegistry>,
+    /// Our own DID.
+    pub our_did: String,
+    /// Ed25519 signing key bytes for outgoing messages.
+    pub signing_key_bytes: [u8; 32],
+    /// iroh endpoint for transport.
+    pub endpoint: Box<dyn ma_core::MaEndpoint>,
+    /// DID resolver for target lookup.
+    pub resolver: Rc<IpfsGatewayResolver>,
+    /// RPC inbox for receiving replies.
+    pub rpc_inbox: ma_core::Inbox<Message>,
+    /// Kubo RPC base URL.
+    pub kubo_rpc_url: String,
+    /// IPFS gateway fallback URL.
+    pub gateway_url: String,
+}
+
 /// Re-export the ma-zscheme Ctx type (Rc<dyn SchemeCtx>) for use in main.rs,
 /// repl.rs, and executor.rs.
 pub use ma_zscheme::Ctx;
@@ -51,26 +71,19 @@ pub use ma_zscheme::Ctx;
 // ── Constructor ────────────────────────────────────────────────────────────
 
 impl CliCtx {
-    pub fn new(
-        config: Box<dyn DotRegistry>,
-        our_did: String,
-        signing_key_bytes: [u8; 32],
-        endpoint: Box<dyn ma_core::MaEndpoint>,
-        resolver: Rc<IpfsGatewayResolver>,
-        rpc_inbox: ma_core::Inbox<Message>,
-        kubo_rpc_url: String,
-        gateway_url: String,
-    ) -> Rc<Self> {
+    /// Build a shared CLI evaluation context.
+    #[must_use]
+    pub fn new(init: CliCtxInit) -> Rc<Self> {
         Rc::new(Self {
-            config: RefCell::new(config),
-            our_did,
-            signing_key_bytes,
-            endpoint: RefCell::new(endpoint),
-            resolver,
+            config: RefCell::new(init.config),
+            our_did: init.our_did,
+            signing_key_bytes: init.signing_key_bytes,
+            endpoint: tokio::sync::Mutex::new(init.endpoint),
+            resolver: init.resolver,
             reply_senders: RefCell::new(HashMap::new()),
-            rpc_inbox: RefCell::new(rpc_inbox),
-            kubo_rpc_url,
-            gateway_url,
+            rpc_inbox: RefCell::new(init.rpc_inbox),
+            kubo_rpc_url: init.kubo_rpc_url,
+            gateway_url: init.gateway_url,
             http: reqwest::Client::new(),
             display_sink: RefCell::new(None),
         })
@@ -88,7 +101,7 @@ impl CliCtx {
 
     /// Close the iroh endpoint gracefully.
     pub async fn close(&self) {
-        self.endpoint.borrow_mut().close().await;
+        self.endpoint.lock().await.close().await;
     }
 
     /// Redirect `(display …)` output to `sink` (daemon mode), or restore
@@ -221,9 +234,10 @@ impl SchemeCtx for CliCtx {
                 format!("@{command}")
             };
 
-            let cfg = self.config.borrow();
-            let (target, verb, str_args) =
-                parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?;
+            let (target, verb, str_args) = {
+                let cfg = self.config.borrow();
+                parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
+            };
             let scheme_args: Vec<SchemeVal> = str_args.into_iter().map(SchemeVal::Str).collect();
 
             let msg_id = self
@@ -256,11 +270,12 @@ impl SchemeCtx for CliCtx {
                 format!("@{actor}")
             };
 
-            let cfg = self.config.borrow();
             // Parse target+verb from the actor string; ignore any string args
             // (the SchemeVal args are passed directly to send_rpc).
-            let (target, verb, _) =
-                parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?;
+            let (target, verb, _) = {
+                let cfg = self.config.borrow();
+                parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
+            };
 
             let msg_id = self
                 .send_rpc(&target, &verb, args)
@@ -328,12 +343,13 @@ impl SchemeCtx for CliCtx {
         let resolver = self.resolver.clone();
         let target_owned = target.to_string();
         Box::pin(async move {
-            let mut outbox = self
-                .endpoint
-                .borrow()
-                .outbox(resolver.as_ref(), &target_owned, RPC_PROTOCOL_ID)
-                .await
-                .map_err(|e| e.to_string())?;
+            let mut outbox = {
+                let endpoint = self.endpoint.lock().await;
+                endpoint
+                    .outbox(resolver.as_ref(), &target_owned, RPC_PROTOCOL_ID)
+                    .await
+                    .map_err(|e| e.to_string())?
+            };
             outbox.send(&msg).await.map_err(|e| e.to_string())?;
             Ok(msg_id)
         })
@@ -368,12 +384,13 @@ impl SchemeCtx for CliCtx {
         let resolver = self.resolver.clone();
         let target_owned = target.to_string();
         Box::pin(async move {
-            let mut outbox = self
-                .endpoint
-                .borrow()
-                .outbox(resolver.as_ref(), &target_owned, INBOX_PROTOCOL_ID)
-                .await
-                .map_err(|e| e.to_string())?;
+            let mut outbox = {
+                let endpoint = self.endpoint.lock().await;
+                endpoint
+                    .outbox(resolver.as_ref(), &target_owned, INBOX_PROTOCOL_ID)
+                    .await
+                    .map_err(|e| e.to_string())?
+            };
             outbox.send(&msg).await.map_err(|e| e.to_string())?;
             Ok(msg_id)
         })
@@ -400,7 +417,10 @@ fn cbor_to_scheme_val(v: &ciborium::Value) -> SchemeVal {
     use ciborium::Value as V;
     match v {
         V::Text(s) => SchemeVal::Str(s.clone()),
-        V::Integer(n) => SchemeVal::Int(i128::from(*n) as i64),
+        V::Integer(n) => {
+            let value = i128::from(*n);
+            i64::try_from(value).map_or_else(|_| SchemeVal::Str(value.to_string()), SchemeVal::Int)
+        }
         V::Float(f) => SchemeVal::Float(*f),
         V::Bool(b) => SchemeVal::Bool(*b),
         V::Null => SchemeVal::Nil,

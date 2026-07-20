@@ -11,6 +11,10 @@ use crate::scheme::eval_source;
 /// - Strips a shebang line (`#!`) if present on the first line.
 /// - Evaluates all top-level Scheme expressions in order.
 /// - Returns `Ok(())` on success; prints errors to stderr.
+///
+/// # Errors
+///
+/// Returns an error if the script cannot be read or evaluation fails.
 pub async fn run_file(path: &Path, ctx: Ctx) -> Result<()> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("cannot read script: {}", path.display()))?;
@@ -27,6 +31,7 @@ pub async fn run_file(path: &Path, ctx: Ctx) -> Result<()> {
 }
 
 /// Strip a leading shebang line (`#!…`) if present.
+#[must_use]
 pub fn strip_shebang(source: &str) -> &str {
     if source.starts_with("#!") {
         match source.find('\n') {

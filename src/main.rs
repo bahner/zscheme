@@ -18,7 +18,7 @@ use tokio::task::spawn_local;
 use tracing::{info, warn};
 use zeroize::Zeroize;
 
-use crate::context::{CliCtx, Ctx};
+use crate::context::{CliCtx, CliCtxInit, Ctx};
 use crate::scheme::init_session_env;
 use ma_zscheme_yaml::SchemeConfig;
 
@@ -132,11 +132,11 @@ async fn main() -> Result<()> {
         cfg_tmp.effective_secret_bundle()?
     };
 
-    let core_config = if !bundle_path_check.exists() {
-        warn!("No zscheme identity found — generating a new one.");
-        Config::gen_headless(&cli.ma, ZSCHEME_SLUG)?;
+    let core_config = if bundle_path_check.exists() {
         Config::from_args(&cli.ma, ZSCHEME_SLUG)?
     } else {
+        warn!("No zscheme identity found — generating a new one.");
+        Config::gen_headless(&cli.ma, ZSCHEME_SLUG)?;
         Config::from_args(&cli.ma, ZSCHEME_SLUG)?
     };
 
@@ -168,16 +168,16 @@ async fn main() -> Result<()> {
     let resolver = Rc::new(IpfsGatewayResolver::default());
     let signing_key_bytes = secrets.did_signing_key;
 
-    let ctx = CliCtx::new(
-        Box::new(scheme_config),
-        our_did.clone(),
+    let ctx = CliCtx::new(CliCtxInit {
+        config: Box::new(scheme_config),
+        our_did: our_did.clone(),
         signing_key_bytes,
         endpoint,
         resolver,
         rpc_inbox,
-        core_config.kubo_rpc_url.clone(),
-        cli.gateway.clone(),
-    );
+        kubo_rpc_url: core_config.kubo_rpc_url.clone(),
+        gateway_url: cli.gateway.clone(),
+    });
 
     // Zeroize signing key copy from secrets after it has been stored in ctx.
     secrets.did_signing_key.zeroize();

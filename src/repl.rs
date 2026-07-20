@@ -35,6 +35,11 @@ impl ReplEval for LocalEval {
 /// History is persisted to `$XDG_DATA_HOME/ma/zscheme_history`.
 /// Multi-line expressions are buffered until parentheses balance.
 /// Ctrl-C clears the current buffer; Ctrl-D / EOF exits.
+///
+/// # Errors
+///
+/// Returns an error if readline initialization fails or the evaluator reports
+/// an unrecoverable I/O error.
 pub async fn run_repl<E: ReplEval>(mut evaluator: E) -> anyhow::Result<()> {
     let history_path = history_file_path();
 
@@ -59,12 +64,12 @@ pub async fn run_repl<E: ReplEval>(mut evaluator: E) -> anyhow::Result<()> {
             Ok(l) => l,
             Err(ReadlineError::Interrupted) => {
                 // Ctrl-C: clear current buffer, start fresh
-                if !buffer.is_empty() {
+                if buffer.is_empty() {
+                    eprintln!("^C  (Ctrl-D or (exit) to quit)");
+                } else {
                     buffer.clear();
                     depth = 0;
                     eprintln!("^C");
-                } else {
-                    eprintln!("^C  (Ctrl-D or (exit) to quit)");
                 }
                 continue;
             }

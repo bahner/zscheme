@@ -132,6 +132,38 @@ After loading:
 (string-split "a,b,c" ",")               ; → ("a" "b" "c")
 ```
 
+### Associative maps
+
+Use maps when you want to pass or keep structured values with named fields.
+Map keys are strings, and update operations return a new map value.
+
+```scheme
+(define room (make-map "name" "Garden" "players" 3))
+
+(map-ref room "name")                    ; → "Garden"
+(map-ref room "missing" "fallback")      ; → "fallback"
+(map-has-key? room "players")            ; → #t
+
+(define updated (map-set room "players" 4))
+(map-ref updated "players")              ; → 4
+(map-ref room "players")                 ; → 3
+```
+
+Maps are useful for actor calls that expect structured CBOR terms:
+
+```scheme
+(rpc-send "@sky#room" ":describe"
+          (make-map "name" "Garden"
+                    "description" "A quiet place under glass."))
+```
+
+Convert to and from association lists when list processing is more convenient:
+
+```scheme
+(map->alist room)                         ; → (("name" "Garden") ("players" 3))
+(alist->map '(("name" "Garden") ("players" 3)))
+```
+
 ---
 
 ## 5. Writing scripts

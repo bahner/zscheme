@@ -5,7 +5,7 @@ CID_FILES := $(MA_FILES:.ma=.cid)
 PREFIX    ?= /usr/local
 BINDIR    ?= $(PREFIX)/bin
 
-.PHONY: all build release install lint publish cids clean
+.PHONY: all build check test release install lint fmt fmt-check publish cids clean
 
 all: build
 
@@ -13,6 +13,13 @@ all: build
 
 build:
 	cargo build
+
+check:
+	cargo check
+
+test: fmt-check
+	cargo clippy --all-targets -- -W clippy::pedantic -D warnings
+	cargo test
 
 release:
 	cargo build --release
@@ -23,7 +30,15 @@ install: release
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
 lint:
+	cargo clippy -- -D warnings
+	cargo fmt --check
 	mdl $(MD_FILES)
+
+fmt:
+	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all --check
 
 # ── IPFS ──────────────────────────────────────────────────────────────────────
 
