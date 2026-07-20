@@ -14,14 +14,16 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Context, Result};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::Notify;
 use tokio::task::spawn_local;
 use tracing::{info, warn};
 
 use crate::context::{CliCtx, Ctx};
-use crate::ipc::{read_frame, socket_path, write_frame, Request, Response};
+use crate::ipc::{
+    bind_socket, connect_socket, read_frame, socket_endpoint, write_frame, IpcStream, Request,
+    Response,
+};
 use crate::scheme::{SchemeErr, SchemeVal};
 
 /// Run the daemon accept loop. Assumes the caller already built the full
@@ -39,8 +41,7 @@ use crate::scheme::{SchemeErr, SchemeVal};
 /// Returns an error if the daemon socket cannot be claimed or bound, signal
 /// handlers cannot be installed, or startup image access fails.
 pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
-    let path = socket_path()?;
-    claim_socket(&path).await?;
+    claim_socket().await?;
 
     if let Some(ref img_path) = img {
         if img_path.exists() {
@@ -54,20 +55,19 @@ pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
         }
     }
 
-    let listener =
-        UnixListener::bind(&path).with_context(|| format!("cannot bind {}", path.display()))?;
+    let listener = bind_socket().await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let path = crate::ipc::socket_path()?;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
-    info!(socket = %path.display(), did = %ctx.our_did, "zscheme daemon listening");
+    info!(socket = %socket_endpoint()?, did = %ctx.our_did, "zscheme daemon listening");
 
     let stop = Rc::new(Notify::new());
     let eval_lock = Rc::new(tokio::sync::Mutex::new(()));
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("cannot install SIGTERM handler")?;
+    let mut terminate = Box::pin(wait_for_terminate_signal());
 
     loop {
         tokio::select! {
@@ -94,13 +94,17 @@ pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
                 info!("SIGINT — shutting down");
                 break;
             }
-            _ = sigterm.recv() => {
+            result = &mut terminate => {
+                result?;
                 info!("SIGTERM — shutting down");
                 break;
             }
         }
     }
 
+    #[cfg(unix)]
+    let path = crate::ipc::socket_path()?;
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&path);
 
     // Persist the session image on clean shutdown.
@@ -115,11 +119,16 @@ pub async fn run(ctx: Rc<CliCtx>, img: Option<PathBuf>) -> Result<()> {
 }
 
 /// Take over the socket: ask a live daemon to stop, then remove the file.
-async fn claim_socket(path: &std::path::Path) -> Result<()> {
+async fn claim_socket() -> Result<()> {
+    #[cfg(unix)]
+    let path = crate::ipc::socket_path()?;
+
+    #[cfg(unix)]
     if !path.exists() {
         return Ok(());
     }
-    if let Ok(mut stream) = UnixStream::connect(path).await {
+
+    if let Ok(mut stream) = connect_socket().await {
         info!("asking the running daemon to stop");
         write_frame(&mut stream, &Request::Stop).await?;
         while let Some(resp) = read_frame::<_, Response>(&mut stream).await? {
@@ -130,26 +139,44 @@ async fn claim_socket(path: &std::path::Path) -> Result<()> {
         // Wait for the old daemon to release the socket.
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            #[cfg(unix)]
             if !path.exists() {
                 return Ok(());
             }
         }
-        if UnixStream::connect(path).await.is_ok() {
+        if connect_socket().await.is_ok() {
             return Err(anyhow!(
                 "running daemon did not release {} — kill it manually",
-                path.display()
+                socket_endpoint()?
             ));
         }
     }
-    std::fs::remove_file(path)
+
+    #[cfg(unix)]
+    std::fs::remove_file(&path)
         .with_context(|| format!("cannot remove stale socket {}", path.display()))?;
     Ok(())
+}
+
+async fn wait_for_terminate_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .context("cannot install SIGTERM handler")?;
+        sigterm.recv().await;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::future::pending::<()>().await;
+        Ok(())
+    }
 }
 
 // ── Connection handling ────────────────────────────────────────────────────
 
 async fn handle_conn(
-    stream: UnixStream,
+    stream: IpcStream,
     ctx: Rc<CliCtx>,
     eval_lock: Rc<tokio::sync::Mutex<()>>,
     stop: Rc<Notify>,

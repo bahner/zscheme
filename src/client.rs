@@ -11,9 +11,10 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use tokio::net::UnixStream;
 
-use crate::ipc::{daemon_log_path, read_frame, socket_path, write_frame, Request, Response};
+use crate::ipc::{
+    connect_socket, daemon_log_path, read_frame, write_frame, IpcStream, Request, Response,
+};
 use crate::repl::{self, ReplEval};
 
 /// How many times to retry connecting after auto-spawning the daemon.
@@ -24,7 +25,7 @@ const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(250);
 // ── Client ─────────────────────────────────────────────────────────────────
 
 pub struct DaemonClient {
-    stream: UnixStream,
+    stream: IpcStream,
     next_id: u64,
     isolated: bool,
     /// Whether the last `Eval` produced display output that did not end
@@ -41,15 +42,14 @@ impl DaemonClient {
     /// Returns an error if the socket path cannot be resolved, the daemon
     /// cannot be started or reached, or the version handshake fails.
     pub async fn connect_or_spawn(isolated: bool) -> Result<Self> {
-        let path = socket_path()?;
-        let stream = if let Ok(stream) = UnixStream::connect(&path).await {
+        let stream = if let Ok(stream) = connect_socket().await {
             stream
         } else {
             spawn_daemon()?;
             let mut stream = None;
             for _ in 0..SPAWN_RETRIES {
                 tokio::time::sleep(SPAWN_RETRY_DELAY).await;
-                if let Ok(s) = UnixStream::connect(&path).await {
+                if let Ok(s) = connect_socket().await {
                     stream = Some(s);
                     break;
                 }
@@ -238,9 +238,8 @@ pub async fn save(file: Option<PathBuf>) -> Result<()> {
 }
 
 /// Connect to a running daemon, or `None` if the socket is dead.
-async fn connect_existing() -> Result<Option<UnixStream>> {
-    let path = socket_path()?;
-    Ok(UnixStream::connect(&path).await.ok())
+async fn connect_existing() -> Result<Option<IpcStream>> {
+    Ok(connect_socket().await.ok())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

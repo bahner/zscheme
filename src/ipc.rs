@@ -2,17 +2,36 @@
 //!
 //! Wire format: each frame is a big-endian `u32` length prefix followed by a
 //! CBOR-encoded `Request` or `Response`. Transport is a per-user Unix domain
-//! socket — the daemon owns the single iroh endpoint for the identity, and
-//! frontends (REPL / scripts) submit Scheme source for evaluation.
+//! socket on Unix and a loopback TCP socket on Windows — the daemon owns the
+//! single iroh endpoint for the identity, and frontends (REPL / scripts)
+//! submit Scheme source for evaluation.
 
+#[cfg(windows)]
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(windows)]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
+
+#[cfg(windows)]
+pub type IpcListener = TcpListener;
+#[cfg(unix)]
+pub type IpcListener = UnixListener;
+#[cfg(windows)]
+pub type IpcStream = TcpStream;
+#[cfg(unix)]
+pub type IpcStream = UnixStream;
 
 /// Maximum accepted frame size (16 MiB) — guards against corrupt prefixes.
 const MAX_FRAME_LEN: u32 = 16 * 1024 * 1024;
+
+#[cfg(windows)]
+const WINDOWS_DAEMON_PORT: u16 = 29_787;
 
 // ── Messages ───────────────────────────────────────────────────────────────
 
@@ -61,7 +80,7 @@ pub enum Response {
     EnvDump { source: String },
 }
 
-// ── Socket path ────────────────────────────────────────────────────────────
+// ── Socket endpoint ────────────────────────────────────────────────────────
 
 /// Resolve the per-user daemon socket path.
 ///
@@ -72,6 +91,7 @@ pub enum Response {
 ///
 /// Returns an error if the home/data directory cannot be resolved or the
 /// fallback socket directory cannot be created.
+#[cfg(unix)]
 pub fn socket_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().ok_or_else(|| anyhow!("cannot resolve home dir"))?;
     if let Some(runtime) = base.runtime_dir() {
@@ -85,6 +105,72 @@ pub fn socket_path() -> Result<PathBuf> {
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
     Ok(dir.join("zscheme.sock"))
+}
+
+/// Resolve the Windows loopback daemon address.
+#[cfg(windows)]
+#[must_use]
+pub fn socket_addr() -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, WINDOWS_DAEMON_PORT))
+}
+
+/// Human-readable daemon endpoint for logs and errors.
+///
+/// # Errors
+///
+/// Returns an error if the Unix socket path cannot be resolved.
+#[cfg_attr(windows, allow(clippy::unnecessary_wraps))]
+pub fn socket_endpoint() -> Result<String> {
+    #[cfg(unix)]
+    {
+        Ok(socket_path()?.display().to_string())
+    }
+    #[cfg(windows)]
+    {
+        Ok(socket_addr().to_string())
+    }
+}
+
+/// Connect to the daemon endpoint.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint cannot be resolved or connected.
+pub async fn connect_socket() -> Result<IpcStream> {
+    #[cfg(unix)]
+    {
+        let path = socket_path()?;
+        UnixStream::connect(&path)
+            .await
+            .with_context(|| format!("cannot connect to {}", path.display()))
+    }
+    #[cfg(windows)]
+    {
+        let addr = socket_addr();
+        TcpStream::connect(addr)
+            .await
+            .with_context(|| format!("cannot connect to {addr}"))
+    }
+}
+
+/// Bind the daemon endpoint.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint cannot be resolved or bound.
+pub async fn bind_socket() -> Result<IpcListener> {
+    #[cfg(unix)]
+    {
+        let path = socket_path()?;
+        UnixListener::bind(&path).with_context(|| format!("cannot bind {}", path.display()))
+    }
+    #[cfg(windows)]
+    {
+        let addr = socket_addr();
+        TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("cannot bind {addr}"))
+    }
 }
 
 /// Path to the daemon log file (stdout/stderr of auto-spawned daemons).
