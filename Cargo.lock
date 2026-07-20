@@ -2285,18 +2285,18 @@ dependencies = [
 
 [[package]]
 name = "ma-zscheme"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79f3054ea5ada4ef4f5840197966456da2c1d2d004bb6bed63b54b4e544e326b"
+checksum = "c7b616b0cd4da5397e5c7a57719d67d6ad51bc90ef4ed283b4da562edeb4c8a7"
 dependencies = [
  "futures",
 ]
 
 [[package]]
 name = "ma-zscheme-yaml"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "399c49e736f882fa26b400d7c82c3dcaf587dad42efce871082cd435f0a5a6b1"
+checksum = "cc6f80dfef4c02e908503766469731e8cc0fa1dc08967f5017e9e8e748f3ed9d"
 dependencies = [
  "anyhow",
  "directories 5.0.1",
@@ -3701,9 +3701,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.150"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",
