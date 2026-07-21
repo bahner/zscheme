@@ -26,7 +26,6 @@
 (define ENTER  ":enter")
 (define CLAIM  ":claim")
 (define AVATAR "#avatar")
-(define HOUSE  "#house")
 
 (define (parse-address addr)
   (let* ((at-idx  (string-index addr "@"))
@@ -55,27 +54,19 @@
         (ok-val r)
         (error (string-append "claim-alias: " (err-msg r))))))
 
-; Obtain an entry ticket from the runtime's house entity.
+; Enter a room directly.
 ; room must include the # sigil, e.g. "#room".
-; (get-room-ticket "@sky" "#room")  →  ticket string
-(define (get-room-ticket runtime room)
-  (let ((r (rpc-send (string-append runtime HOUSE) ENTER room)))
-    (if (ok? r)
-        (ok-val r)
-        (error (string-append "get-room-ticket: " (err-msg r))))))
-
-; Present a ticket to the room and complete the entry handshake.
-; (enter-room "@sky" "#room" ticket)  →  room's welcome reply
-(define (enter-room runtime room ticket)
-  (let ((r (rpc-send (string-append runtime room) ENTER ticket)))
+; (enter-room "@sky" "#room")  →  room's welcome reply
+(define (enter-room runtime room)
+  (let ((r (rpc-send (string-append runtime room) ENTER)))
     (if (ok? r)
         (ok-val r)
         (error (string-append "enter-room: " (err-msg r))))))
 
 ; ── Composite ─────────────────────────────────────────────────────────────────
 ;
-; (enter "alice@sky#room")  — claim avatar name, get ticket, enter room.
-; (enter "@sky#room")       — skip avatar claim, get ticket, enter room.
+; (enter "alice@sky#room")  — claim avatar name, enter room.
+; (enter "@sky#room")       — skip avatar claim, enter room.
 ;
 ; Returns the room's welcome reply.
 (define (enter addr)
@@ -89,8 +80,7 @@
       (error (string-append "enter: no room in address: " addr)))
     (when avatar
       (claim-alias runtime avatar))
-    (let ((ticket (get-room-ticket runtime room)))
-      (enter-room runtime room ticket))))
+    (enter-room runtime room)))
 
 (define (fib n)
   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))

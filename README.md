@@ -16,7 +16,7 @@ before normal dispatch. Results are spliced back as strings into the command.
 
 ```scheme
 ; Inline substitution — result becomes part of the command
-(.my.aliases.sky)#room:enter ((.my.aliases.ms)#house:enter #room)
+(.my.aliases.sky)#room:look ((string-append "north" " gate"))
 
 ; Standalone expressions
 (+ 7 5)                               ; → 12
@@ -93,10 +93,10 @@ It runs until logout/reboot or `zscheme --stop`.
 
 ```scheme
 ; @ syntax — auto-unwraps the reply value:
-(@sky#house:enter #room)              ; → "ticket-xyz"
+(@sky#room:look)                      ; → "You are in a quiet room."
 
 ; rpc-send — returns a raw (:ok …) / (:error …) tuple:
-(rpc-send "@sky#house" ":enter" "#room")  ; → (:ok "ticket-xyz")
+(rpc-send "@sky#room" ":look")       ; → (:ok "You are in a quiet room.")
 (ok? (rpc-send "@sky#ping" ":ping"))      ; → #t
 ```
 
@@ -113,12 +113,9 @@ It runs until logout/reboot or `zscheme --stop`.
          (room    (substring addr hash (string-length addr)))
          (target  (string-append runtime room))
          (_       (rpc-send (string-append runtime "#avatar") ":claim" alias))
-         (result  (rpc-send (string-append runtime "#house") ":enter" room)))
+         (result  (rpc-send target ":enter")))
     (if (ok? result)
-        (let ((entered (rpc-send target ":enter" (ok-val result))))
-          (if (ok? entered)
-              (begin (use target) (ok-val entered))
-              (error (err-msg entered))))
+        (begin (use target) (ok-val result))
         (error (err-msg result)))))
 
 ; Usage:

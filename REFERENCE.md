@@ -39,7 +39,7 @@ val | (f arg)    → pipe / threading (inside expressions)
 Both path/actor/scheme forms may appear in a single line:
 
 ```
-(.my.aliases.sky)#room:enter ((.my.aliases.ms)#house:enter #room)
+(.my.aliases.sky)#room:look ((string-append "north" " gate"))
 ```
 
 The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
@@ -59,9 +59,9 @@ The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
 | Map | `(make-map "name" "Ada")` | String-keyed associative map |
 | Lambda | `(lambda (x) x)` | Closure |
 | MaPath | `.my.aliases.sky` | Local config path reference (`.my`, `.ctx`) |
-| MaActor | `@sky#house` | Actor target |
+| MaActor | `@sky#room` | Actor target |
 
-Fragment atoms such as `#room` and `#house:enter` are treated as strings.
+Fragment atoms such as `#room` and `#room:look` are treated as strings.
 
 ---
 
@@ -214,7 +214,7 @@ Wrap with `guard` to handle fetch or parse failures:
 ### Actor messages — head starts with `@` or evaluates to `did:…`
 
 ```scheme
-(@sky#house:enter #room)              ; atom target, auto-unwraps reply
+(@sky#room:look)                      ; atom target, auto-unwraps reply
 (did:ma:abc#room:enter ticket-xyz)    ; DID string in function position
 ```
 

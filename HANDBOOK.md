@@ -84,7 +84,7 @@ Raises an error on failure.
 
 ```scheme
 (@sky#ping)                       ; → ":pong"
-(@sky#house:enter #room)          ; → "ticket-xyz"
+(@sky#room:look)                  ; → "You are in a quiet room."
 ```
 
 ### DID in function position
@@ -93,15 +93,15 @@ When a config lookup returns a DID, you can use it as a function:
 
 ```scheme
 (define sky (.my.aliases.sky))
-(sky "#house:enter" "#room")      ; sends to did:ma:…#house:enter
+(sky "#room:look")                ; sends to did:ma:…#room:look
 ```
 
 ### `rpc-send` for explicit error handling
 
 ```scheme
-(define result (rpc-send "@sky#house" ":enter" "#room"))
+(define result (rpc-send "@sky#room" ":look"))
 (if (ok? result)
-    (display (string-append "ticket: " (ok-val result)))
+  (display (ok-val result))
     (error (err-msg result)))
 ```
 
@@ -236,12 +236,9 @@ Store a navigation script (see `stdlib.ma` for `string-index`, `string-split`):
          (room    (caddr parts))   ; requires stdlib
          (target  (string-append runtime room))
          (_       (rpc-send (string-append runtime "#avatar") ":claim" alias))
-         (result  (rpc-send (string-append runtime "#house") ":enter" room)))
+         (result  (rpc-send target ":enter")))
     (if (ok? result)
-        (let ((entered (rpc-send target ":enter" (ok-val result))))
-          (if (ok? entered)
-              (begin (use target) (ok-val entered))
-              (error (err-msg entered))))
+        (begin (use target) (ok-val result))
         (error (err-msg result)))))
 ```
 
@@ -311,7 +308,7 @@ The caught variable is bound to the error message **string**.
 
 ```scheme
 (guard (e (#t "unknown"))
-  (@sky#house:who))
+  (@sky#room:look))
 ```
 
 ### `guard` in scripts (`!eval`)
@@ -348,18 +345,17 @@ restored automatically.
 
 ```scheme
 (define ROOM   "#room")
-(define HOUSE  "#house")
 (define SKY    (.my.aliases.sky))
 
-(rpc-send (string-append SKY HOUSE) ":enter" ROOM)
+(rpc-send (string-append SKY ROOM) ":look")
 ```
 
 ### Combining results
 
 ```scheme
 (define sky (.my.aliases.sky))
-(define ticket (ok-val (rpc-send (string-append sky "#house") ":enter" "#room")))
-(rpc-send (string-append sky "#room") ":enter" ticket)
+(define room (string-append sky "#room"))
+(rpc-send room ":look")
 ```
 
 ### URL sharing
