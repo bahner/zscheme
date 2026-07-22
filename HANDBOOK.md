@@ -235,8 +235,10 @@ Store a navigation script (see `stdlib.ma` for `string-index`, `string-split`):
          (runtime (cadr  parts))   ; requires stdlib
          (room    (caddr parts))   ; requires stdlib
          (target  (string-append runtime room))
-         (_       (rpc-send (string-append runtime "#avatar") ":claim" alias))
-         (result  (rpc-send target ":enter")))
+         (ctx     (make-map "name" alias
+                            "nick" alias
+                            "description" "A zscheme user."))
+         (result  (rpc-send target ":enter" ctx)))
     (if (ok? result)
         (begin (use target) (ok-val result))
         (error (err-msg result)))))
@@ -247,6 +249,14 @@ Call it:
 ```
 .my.doc.world.ma!enter "alice@sky#room"
 ```
+
+For lambda-ma, room enter does not require clients to send `kind=avatar`.
+Ordinary clients may send `name`, `nick`, and `description`; the room or
+root/avatar actor sends the committed context back as `:ctx` with protocol
+`/ma/lambda/ctx/0.0.1`. That context tells the client the effective kind and the
+avatar actor to use for avatar-mediated commands. Actors that enter as direct
+room occupants, such as agents and things, must send explicit `kind=agent` or
+`kind=thing` with full `name`, `nick`, and `description` fields.
 
 Or share as a URL:
 

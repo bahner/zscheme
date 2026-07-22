@@ -100,24 +100,27 @@ Assume `@sky` is the runtime alias and `#construct` is the room:
 
 (setq ma-runtime "@sky")
 (setq ma-room (concat ma-runtime "#construct"))
-(setq ma-avatar (concat ma-runtime "#avatar"))
 ```
 
-Enter by calling the room directly with the ctx payload it expects. Use
-`ma-eval` here because the argument is a zscheme map, not just strings:
+Enter by calling the room directly. Lambda-ma rooms do not require ordinary
+clients to send `kind=avatar`; send only ordinary identity fields and let the
+world choose the effective kind. The committed context comes back asynchronously
+as `:ctx` with protocol `/ma/lambda/ctx/0.0.1` and names the avatar actor to use
+for user commands.
 
 ```elisp
 (ma-eval
  "(rpc-send \"@sky#construct\" \"enter\"
-    (make-map \"kind\" \"avatar\"
-              \"name\" \"alice\"
-              \"nick\" \"alice\"
-              \"description\" \"A zscheme user.\"))")
+   (make-map \"name\" \"alice\"
+          \"nick\" \"alice\"
+          \"description\" \"A zscheme user.\"))")
 ```
 
-User commands go through the avatar:
+After reading the returned lambda ctx, set `ma-avatar` to its `:avatar` value.
+User commands go through that avatar:
 
 ```elisp
+(setq ma-avatar "did:ma:...#avatar")
 (ma-rpc ma-avatar ":look")
 (ma-rpc ma-avatar ":say" "hello world")
 (ma-rpc ma-avatar ":claim")

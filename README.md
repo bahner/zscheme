@@ -112,8 +112,10 @@ It runs until logout/reboot or `zscheme --stop`.
          (runtime (string-append "@" (substring addr (+ at 1) hash)))
          (room    (substring addr hash (string-length addr)))
          (target  (string-append runtime room))
-         (_       (rpc-send (string-append runtime "#avatar") ":claim" alias))
-         (result  (rpc-send target ":enter")))
+         (ctx     (make-map "name" alias
+                            "nick" alias
+                            "description" "A zscheme user."))
+         (result  (rpc-send target ":enter" ctx)))
     (if (ok? result)
         (begin (use target) (ok-val result))
         (error (err-msg result)))))
@@ -121,6 +123,12 @@ It runs until logout/reboot or `zscheme --stop`.
 ; Usage:
 ; (enter-world "alice@sky#room")
 ```
+
+Lambda-ma rooms may answer asynchronously with a `:ctx` message using protocol
+`/ma/lambda/ctx/0.0.1`. That context names the effective `kind` and, for avatar
+sessions, the avatar actor that should receive user commands. Ordinary clients
+may send `name`, `nick`, and `description`, but do not send `kind=avatar` up
+front. Direct agents and things must send explicit `kind` in their enter ctx.
 
 ---
 
