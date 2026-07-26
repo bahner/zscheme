@@ -463,7 +463,7 @@ To persist values across sessions, write to config:
 
 Scripts may be stored as `.my.doc.<name>` documents and evaluated with `!eval`.
 A `.ma` ending is just a document-name convention used in examples; there is no
-`/ma` path suffix or Scheme syntax highlighting behavior.
+`/ma` path suffix or Scheme syntax highlighting behaviour.
 
 ```
 .my.doc.boot.ma!edit         ; write in CodeMirror

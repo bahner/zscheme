@@ -5,7 +5,7 @@
 //! This guarantees exactly one iroh `NodeId` per identity regardless of how
 //! many concurrent `zscheme` frontends are running.
 //!
-//! Evaluations are serialized FIFO across all connections (the Scheme
+//! Evaluations are serialised FIFO across all connections (the Scheme
 //! environment is single-threaded by design). Each `Eval` request streams
 //! `Display` events back to its originating client, followed by a final
 //! `EvalResult`.
