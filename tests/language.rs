@@ -177,6 +177,29 @@ fn unit_include_loads_from_dot_config_path() {
 }
 
 #[test]
+fn unit_stdlib_provides_list_accessors() {
+    let stdlib = fs::read_to_string("stdlib.zscm").unwrap();
+    let source = format!(
+        r#"
+        {stdlib}
+
+        (assert (= (caar '((1 2) 3 4)) 1))
+        (assert (equal? (cdar '((1 2) 3 4)) '(2)))
+        (assert (= (cadr '(1 2 3 4)) 2))
+        (assert (equal? (cddr '(1 2 3 4)) '(3 4)))
+        (assert (= (caadr '(0 (1 2) 3)) 1))
+        (assert (equal? (cdadr '(0 (1 2) 3)) '(2)))
+        (assert (= (cadddr '(0 1 2 3 4)) 3))
+        (assert (equal? (cddddr '(0 1 2 3 4 5)) '(4 5)))
+        "list-accessors-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "list-accessors-ok");
+}
+
+#[test]
 fn unit_display_and_newline_route_to_host_output() {
     let source = r#"
         (display "hello")
