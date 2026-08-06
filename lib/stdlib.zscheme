@@ -1,17 +1,17 @@
-; zscheme stdlib v0.1
-;
-; Userspace implementations of common functions.
-; All of these can be implemented using the core Rust primitives
-; (string-index, substring, string-length, string-append, cons,
-;  car, cdr, null?, pair?, =, <, >, mod, not, display, error).
-;
-; Load with: (include ".my.scheme.stdlib.ma")
-; Or from terminal: .my.scheme.stdlib.ma!eval
-;
-; Publish to IPFS: .my.scheme.stdlib.ma!publish @ma
-; Then share the CID so others can: .my.scheme.stdlib.ma!fetch /ipfs/<cid>
+;; zscheme stdlib v0.1
+;;
+;; Userspace implementations of common functions.
+;; All of these can be implemented using the core Rust primitives
+;; (string-index, substring, string-length, string-append, cons,
+;;  car, cdr, null?, pair?, =, <, >, mod, not, display, error).
+;;
+;; Load with: (include ".my.scheme.stdlib.ma")
+;; Or from terminal: .my.scheme.stdlib.ma!eval
+;;
+;; Publish to IPFS: .my.scheme.stdlib.ma!publish @ma
+;; Then share the CID so others can: .my.scheme.stdlib.ma!fetch /ipfs/<cid>
 
-; ── List aliases ──────────────────────────────────────────────────────────────
+;; ── List aliases ──────────────────────────────────────────────────────────────
 
 (define (caar x) (car (car x)))
 (define (cadr x) (car (cdr x)))
@@ -44,18 +44,18 @@
 (define (cdddar x) (cdr (cdr (cdr (car x)))))
 (define (cddddr x) (cdr (cdr (cdr (cdr x)))))
 
-; ── Type predicates ───────────────────────────────────────────────────────────
+;; ── Type predicates ───────────────────────────────────────────────────────────
 
 (define (list? x) (or (null? x) (pair? x)))
 
-; ── Aliases ───────────────────────────────────────────────────────────────────
+;; ── Aliases ───────────────────────────────────────────────────────────────────
 
 (define eq?       equal?)
 (define eqv?      equal?)
 (define quotient  /)
 (define remainder mod)
 
-; ── List operations ───────────────────────────────────────────────────────────
+;; ── List operations ───────────────────────────────────────────────────────────
 
 (define (length lst)
   (let loop ((l lst) (n 0))
@@ -107,7 +107,7 @@
         ((not (f (car lst))) #f)
         (else (every f (cdr lst)))))
 
-; ── Numeric utilities ─────────────────────────────────────────────────────────
+;; ── Numeric utilities ─────────────────────────────────────────────────────────
 
 (define (abs n)       (if (< n 0) (- n) n))
 (define (max a b)     (if (> a b) a b))
@@ -118,7 +118,7 @@
 (define (even? n)     (= (mod n 2) 0))
 (define (odd? n)      (not (even? n)))
 
-; ── String utilities ──────────────────────────────────────────────────────────
+;; ── String utilities ──────────────────────────────────────────────────────────
 
 (define (string-contains hay needle)
   (not (equal? (string-index hay needle) #f)))
@@ -174,7 +174,7 @@
 (define (contains? lst item)
   (not (equal? (member item lst) #f)))
 
-; View helpers — replaces Rust :cat :head :tail :wc
+;; View helpers — replaces Rust :cat :head :tail :wc
 (define (doc-cat path)
   (eval (string-append "(" path ".content)")))
 
