@@ -1,7 +1,7 @@
 LIBRARIES := stdlib runtime
 LIBRARY_SOURCES := $(LIBRARIES:%=%.zscheme)
 LIBRARY_CIDS := $(LIBRARIES:%=%.cid)
-BOOTSTRAP := my.scheme
+BOOTSTRAP := .my.scheme
 BOOTSTRAP_CID := $(BOOTSTRAP).cid
 
 .PHONY: publish cids clean
