@@ -29,8 +29,8 @@ as a string at that position. The remaining text is dispatched normally.
 
 ```
 .path            → dot-command (control command: .ma, .use, .help, …)
-.my.path         → dot path atom (config get/set/delete, inside Scheme expressions)
-#/ipfs/<cid>     → remote fetch (read-only, inside Scheme expressions)
+#.my.path        → config path atom (read/write local config, inside Scheme expressions)
+(include #/ipfs/) → content-addressed library loading (only inside `include`)
 @                → actor message (RPC)
 (                → Scheme expression
 val | (f arg)    → pipe / threading (inside expressions)
@@ -39,7 +39,7 @@ val | (f arg)    → pipe / threading (inside expressions)
 Both path/actor/scheme forms may appear in a single line:
 
 ```
-(.my.aliases.sky)#room:look ((string-append "north" " gate"))
+(#.my.aliases.sky)#room:look ((string-append "north" " gate"))
 ```
 
 The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
@@ -58,7 +58,7 @@ The `'` quote shorthand is supported: `'(a b c)` ≡ `(quote (a b c))`.
 | List | `(1 2 3)` | Proper list |
 | Map | `(make-map "name" "Ada")` | String-keyed associative map |
 | Lambda | `(lambda (x) x)` | Closure |
-| MaPath | `.my.aliases.sky` | Local config path reference (`.my`, `.ctx`) |
+| MaPath | `#.my.aliases.sky` | Local config path reference (hash-dot syntax) |
 | MaActor | `@sky#room` | Actor target |
 
 Fragment atoms such as `#room` and `#room:look` are treated as strings.
@@ -148,17 +148,17 @@ to the error message **string**.
 ```scheme
 ; Swallow a missing-content error, fall back to nil:
 (guard (e (#t nil))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 
 ; Log and continue:
 (guard (e (#t (display (string-append "load failed: " e))))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 
 ; Re-raise unexpected errors:
 (guard (e
         ((string-contains e "not found") nil)
         (#t (error e)))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 ```
 
 ---
@@ -168,35 +168,29 @@ to the error message **string**.
 The evaluator recognises two dispatch classes based on the head of a list
 form. These use the **existing ma grammar** — no new function names.
 
-### Path atoms — head starts with `#/`
+### Path atoms
 
-`.my…` and `.ctx…` address local config (read-write); `#/ipfs/…`,
-`#/ipns/…`, and `#/ipld/…` fetch remote content (read-only — no arguments
-accepted). The `#/` sigil avoids colliding with the `/` division builtin.
+`#.my…` addresses local config (read-write). It uses the `#`
+dispatch sigil, keeping `.` free for standard Scheme dotted-pair notation.
 
 ```scheme
-(.my.aliases.sky)            ; get leaf value → String
-(.my.doc.notes.content)      ; get leaf value
-(.my.config.k: "v")          ; set leaf       → Nil
-(.my.aliases.old:)           ; delete subtree → Nil
-
-(#/ipfs/bafyxxx)             ; fetch CID content → String
-(#/ipns/k51xxx)              ; resolve + fetch IPNS content → String
+(#.my.aliases.sky)            ; get leaf value → String
+(#.my.doc.notes.content)      ; get leaf value
+(#.my.config.k: "v")          ; set leaf       → Nil
+(#.my.aliases.old:)           ; delete subtree → Nil
 ```
 
 If the path names a subtree rather than a leaf, a List of child path strings
 is returned.
 
-Path verbs (`#/path!verb`) are **not** supported inside Scheme expressions.
+Path verbs (`#.path!verb`) are **not** supported inside Scheme expressions.
 
-To load definitions from a CID (equivalent to the old `<bafy…>`
-head-position callable), use the `include` builtin — it accepts either an
-unquoted path atom or a quoted path string:
+To load definitions from a content-addressed CID, use `include` with a
+`#/ipfs/…` literal atom or a local config path:
 
 ```scheme
 (include #/ipfs/bafyxxx)         ; fetch + eval all top-level defines
-(include "/ipfs/bafyxxx")        ; same, quoted string form
-(include ".my.doc.stdlib")        ; load from local config
+(include #.my.doc.stdlib)        ; load from local config
 ```
 
 Defines made inside the included content are available to all subsequent
@@ -222,7 +216,7 @@ When the head evaluates to a `did:…` string and the first argument starts
 with `#`, the argument is appended without a space to form the fragment address:
 
 ```scheme
-(define sky (.my.aliases.sky))        ; → "did:ma:abc"
+(define sky (#.my.aliases.sky))        ; → "did:ma:abc"
 (sky "#room:enter" ticket)            ; → sends to did:ma:abc#room:enter
 ```
 
@@ -456,7 +450,7 @@ the duration of the login session:
 To persist values across sessions, write to config:
 
 ```scheme
-(.my.config.counter: (number->string (+ 1 (string->number (.my.config.counter)))))
+(#.my.config.counter: (number->string (+ 1 (string->number (#.my.config.counter)))))
 ```
 
 ### Scripting with `.my.doc`

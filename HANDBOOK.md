@@ -47,30 +47,31 @@ Redefine at any time:
 Read a value:
 
 ```scheme
-(.my.aliases.sky)              ; → did:ma:…
-(.my.config.colour.text)       ; → #00ff41
+(#.my.aliases.sky)              ; → did:ma:…
+(#.my.config.colour.text)       ; → #00ff41
 ```
 
 Write a value:
 
 ```scheme
-(.my.config.greeting: "hello")
+(#.my.config.greeting: "hello")
 ```
 
 Delete a subtree:
 
 ```scheme
-(.my.temp:)
+(#.my.temp:)
 ```
 
 Compose paths dynamically:
 
 ```scheme
-(define (alias name)
-  (string-append ".my.aliases." name))
+; Use the #. atom directly for static paths:
+(#.my.aliases.sky)               ; → did:ma:…
 
-; Now use it:
-((alias "sky"))               ; → resolves .my.aliases.sky
+; For a dynamic key, store the alias value first:
+(define sky (#.my.aliases.sky))
+; … then use the DID string as needed
 ```
 
 ---
@@ -92,7 +93,7 @@ Raises an error on failure.
 When a config lookup returns a DID, you can use it as a function:
 
 ```scheme
-(define sky (.my.aliases.sky))
+(define sky (#.my.aliases.sky))
 (sky "#room:look")                ; sends to did:ma:…#room:look
 ```
 
@@ -290,7 +291,7 @@ Raise your own errors with `error`:
 (define (require-value v msg)
   (if (equal? v #f) (error msg) v))
 
-(require-value (.my.aliases.sky) "sky alias not set")
+(require-value (#.my.aliases.sky) "sky alias not set")
 ```
 
 ### `guard` — catching errors (R7RS-small)
@@ -301,17 +302,17 @@ The caught variable is bound to the error message **string**.
 ```scheme
 ; Silently ignore a missing CID:
 (guard (e (#t nil))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 
 ; Log the error and fall back to a default:
 (guard (e (#t (display (string-append "load failed: " e))))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 
 ; Handle specific errors differently, re-raise everything else:
 (guard (e
         ((string-contains e "not found") nil)
         (#t (error e)))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 ```
 
 `guard` is also useful around RPC calls that may time out:
@@ -330,7 +331,7 @@ script can continue:
 ```scheme
 ; Load a CID library — continue with a warning if unavailable:
 (guard (e (#t (display (string-append "warn: " e))))
-  (#/ipfs/bafyxxx))
+  (include #/ipfs/bafyxxx))
 
 ; Subsequent lines only run if the guard above did not re-raise:
 (enter "@sky#room")
@@ -345,7 +346,7 @@ script can continue:
 Create `.my.doc.boot.ma` with your session initialisations and call:
 
 ```scheme
-(include ".my.doc.boot.ma")
+(include #.my.doc.boot.ma)
 ```
 
 Or add to startup config — if `.my.ctx.use` is `"true"` at login, focus is
@@ -355,7 +356,7 @@ restored automatically.
 
 ```scheme
 (define ROOM   "#room")
-(define SKY    (.my.aliases.sky))
+(define SKY    (#.my.aliases.sky))
 
 (rpc-send (string-append SKY ROOM) ":look")
 ```
@@ -363,7 +364,7 @@ restored automatically.
 ### Combining results
 
 ```scheme
-(define sky (.my.aliases.sky))
+(define sky (#.my.aliases.sky))
 (define room (string-append sky "#room"))
 (rpc-send room ":look")
 ```

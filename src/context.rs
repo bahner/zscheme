@@ -35,9 +35,7 @@ pub struct CliCtx {
     pub rpc_inbox: RefCell<ma_core::Inbox<Message>>,
     /// Kubo RPC base URL (e.g. `http://127.0.0.1:5001`).
     pub kubo_rpc_url: String,
-    /// IPFS gateway fallback URL (e.g. `https://dweb.link`).
-    pub gateway_url: String,
-    /// reqwest client (reused across CID fetches).
+    /// reqwest client (reused for local Kubo cat calls).
     pub http: reqwest::Client,
     /// Optional display redirect. When set (daemon mode), `(display …)`
     /// output is routed here instead of stdout.
@@ -60,8 +58,6 @@ pub struct CliCtxInit {
     pub rpc_inbox: ma_core::Inbox<Message>,
     /// Kubo RPC base URL.
     pub kubo_rpc_url: String,
-    /// IPFS gateway fallback URL.
-    pub gateway_url: String,
 }
 
 /// Re-export the ma-zscheme Ctx type (Rc<dyn SchemeCtx>) for use in main.rs,
@@ -83,7 +79,6 @@ impl CliCtx {
             reply_senders: RefCell::new(HashMap::new()),
             rpc_inbox: RefCell::new(init.rpc_inbox),
             kubo_rpc_url: init.kubo_rpc_url,
-            gateway_url: init.gateway_url,
             http: reqwest::Client::new(),
             display_sink: RefCell::new(None),
         })
@@ -196,14 +191,14 @@ impl SchemeCtx for CliCtx {
     // ── Async ─────────────────────────────────────────────────────────────
 
     fn fetch_path<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
-        let arg = path.trim_start_matches('/');
         let kubo_url = format!(
             "{}/api/v0/cat?arg={}",
             self.kubo_rpc_url.trim_end_matches('/'),
             path
         );
-        let gw_url = format!("{}/{}", self.gateway_url.trim_end_matches('/'), arg);
         let http = self.http.clone();
+        let resolver = self.resolver.clone();
+        let path = path.to_string();
         Box::pin(async move {
             match http.post(&kubo_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
@@ -211,15 +206,47 @@ impl SchemeCtx for CliCtx {
                 }
                 _ => {}
             }
-            http.get(&gw_url)
-                .send()
+            resolver
+                .pool()
+                .fetch(&path, None, |body| {
+                    String::from_utf8(body.to_vec()).map_err(|e| e.to_string())
+                })
                 .await
-                .map_err(|e| e.to_string())?
-                .error_for_status()
-                .map_err(|e| e.to_string())?
-                .text()
+        })
+    }
+
+    fn fetch_bytes<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>, String>> {
+        let kubo_url = format!(
+            "{}/api/v0/cat?arg={}",
+            self.kubo_rpc_url.trim_end_matches('/'),
+            path
+        );
+        let http = self.http.clone();
+        let resolver = self.resolver.clone();
+        let path = path.to_string();
+        Box::pin(async move {
+            match http.post(&kubo_url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    return response
+                        .bytes()
+                        .await
+                        .map(|bytes| bytes.to_vec())
+                        .map_err(|error| error.to_string());
+                }
+                _ => {}
+            }
+            resolver.pool().fetch_bytes(&path, None).await
+        })
+    }
+
+    fn resolve_ipns<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
+        let resolver = self.resolver.clone();
+        let path = path.to_string();
+        Box::pin(async move {
+            resolver
+                .resolve_ipns_path(&path)
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|error| error.to_string())
         })
     }
 
@@ -403,11 +430,17 @@ fn scheme_val_to_cbor(v: &SchemeVal) -> ciborium::Value {
     use ciborium::Value as V;
     match v {
         SchemeVal::Str(s) => V::Text(s.clone()),
+        SchemeVal::Bytes(bytes) => V::Bytes(bytes.clone()),
         SchemeVal::Int(n) => V::Integer(ciborium::value::Integer::from(*n)),
         SchemeVal::Float(f) => V::Float(*f),
         SchemeVal::Bool(b) => V::Bool(*b),
         SchemeVal::Nil => V::Null,
         SchemeVal::List(items) => V::Array(items.iter().map(scheme_val_to_cbor).collect()),
+        SchemeVal::Map(map) => V::Map(
+            map.iter()
+                .map(|(key, value)| (V::Text(key.clone()), scheme_val_to_cbor(value)))
+                .collect(),
+        ),
         // Lambdas and builtins can't be serialised — use their display string.
         other => V::Text(other.display()),
     }
@@ -417,6 +450,7 @@ fn cbor_to_scheme_val(v: &ciborium::Value) -> SchemeVal {
     use ciborium::Value as V;
     match v {
         V::Text(s) => SchemeVal::Str(s.clone()),
+        V::Bytes(bytes) => SchemeVal::Bytes(bytes.clone()),
         V::Integer(n) => {
             let value = i128::from(*n);
             i64::try_from(value).map_or_else(|_| SchemeVal::Str(value.to_string()), SchemeVal::Int)
@@ -425,12 +459,26 @@ fn cbor_to_scheme_val(v: &ciborium::Value) -> SchemeVal {
         V::Bool(b) => SchemeVal::Bool(*b),
         V::Null => SchemeVal::Nil,
         V::Array(items) => SchemeVal::List(items.iter().map(cbor_to_scheme_val).collect()),
-        V::Map(pairs) => SchemeVal::List(
-            pairs
-                .iter()
-                .map(|(k, v)| SchemeVal::List(vec![cbor_to_scheme_val(k), cbor_to_scheme_val(v)]))
-                .collect(),
-        ),
+        V::Map(pairs) => {
+            let mut map = std::collections::BTreeMap::new();
+            for (key, value) in pairs {
+                let V::Text(key) = key else {
+                    return SchemeVal::List(
+                        pairs
+                            .iter()
+                            .map(|(key, value)| {
+                                SchemeVal::List(vec![
+                                    cbor_to_scheme_val(key),
+                                    cbor_to_scheme_val(value),
+                                ])
+                            })
+                            .collect(),
+                    );
+                };
+                map.insert(key.clone(), cbor_to_scheme_val(value));
+            }
+            SchemeVal::Map(map)
+        }
         V::Tag(_, inner) => cbor_to_scheme_val(inner),
         _ => SchemeVal::Str(format!("{v:?}")),
     }
@@ -465,5 +513,20 @@ fn decode_rpc_reply(payload: &[u8]) -> Result<SchemeVal, String> {
             _ => Ok(cbor_to_scheme_val(&val)),
         },
         _ => Ok(cbor_to_scheme_val(&val)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cbor_to_scheme_val, scheme_val_to_cbor};
+    use ma_zscheme::SchemeVal;
+
+    #[test]
+    fn bytes_round_trip_through_cbor_value() {
+        let value = SchemeVal::Bytes(vec![0x89, b'P', b'N', b'G']);
+        let SchemeVal::Bytes(bytes) = cbor_to_scheme_val(&scheme_val_to_cbor(&value)) else {
+            panic!("expected byte value");
+        };
+        assert_eq!(bytes, vec![0x89, b'P', b'N', b'G']);
     }
 }

@@ -91,10 +91,15 @@ pub async fn run_repl<E: ReplEval>(mut evaluator: E) -> anyhow::Result<()> {
                 ":quit" | ":q" | ":exit" | "(exit)" => break,
                 _ => {}
             }
+
+            if is_note_line(&line) {
+                continue;
+            }
         }
 
-        // Accumulate and track paren depth
-        for ch in line.chars() {
+        // Accumulate and track paren depth (strip comments so ; ... doesn't skew counts)
+        let stripped = ma_zscheme::parser::strip_comments(&line);
+        for ch in stripped.chars() {
             match ch {
                 '(' => depth += 1,
                 ')' => depth -= 1,
@@ -129,10 +134,26 @@ pub async fn run_repl<E: ReplEval>(mut evaluator: E) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_note_line(line: &str) -> bool {
+    line.trim_start().starts_with(';')
+}
+
 fn history_file_path() -> Option<std::path::PathBuf> {
     directories::BaseDirs::new().map(|b| {
         let dir = b.data_dir().join("ma");
         std::fs::create_dir_all(&dir).ok();
         dir.join("zscheme_history")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_note_line;
+
+    #[test]
+    fn semicolon_led_lines_are_history_only_notes() {
+        assert!(is_note_line("; This is a (.my.ctx.room) note"));
+        assert!(is_note_line("  ;;also-a-note"));
+        assert!(!is_note_line("(display \"; not a note\")"));
+    }
 }

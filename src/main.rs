@@ -165,7 +165,8 @@ async fn main() -> Result<()> {
     let scheme_config = SchemeConfig::load(&data_path);
 
     // ── Build CliCtx ────────────────────────────────────────────────────────
-    let resolver = Rc::new(IpfsGatewayResolver::default());
+    // Local-first pool: localhost gateway, then --gateway, then public fallbacks.
+    let resolver = Rc::new(IpfsGatewayResolver::local_first(&cli.gateway));
     let signing_key_bytes = secrets.did_signing_key;
 
     let ctx = CliCtx::new(CliCtxInit {
@@ -176,7 +177,6 @@ async fn main() -> Result<()> {
         resolver,
         rpc_inbox,
         kubo_rpc_url: core_config.kubo_rpc_url.clone(),
-        gateway_url: cli.gateway.clone(),
     });
 
     // Zeroize signing key copy from secrets after it has been stored in ctx.

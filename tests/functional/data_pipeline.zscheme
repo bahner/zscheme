@@ -1,5 +1,3 @@
-; Functional zscheme test: list processing, maps, and immutable updates.
-
 (define tasks
   (list (make-map "title" "water garden" "done" #t "points" 2)
         (make-map "title" "write note" "done" #f "points" 3)

@@ -126,7 +126,7 @@ fn eval_file(path: &Path) -> Result<SchemeVal, SchemeErr> {
 }
 
 #[test]
-fn unit_dot_parser_accepts_zion_dot_notation() {
+fn unit_host_dot_parser_accepts_normalised_paths() {
     let (path, op) = parse_dot_command(".my.aliases.sky").unwrap();
     assert_eq!(path, "my/aliases/sky");
     assert!(matches!(op, DotOp::Get));
@@ -145,10 +145,10 @@ fn unit_dot_parser_rejects_legacy_slash_local_config() {
 #[test]
 fn unit_evaluator_reads_writes_and_deletes_dot_config() {
     let source = r#"
-        (.my.i18n: "nb")
-        (assert (equal? (.my.i18n) "nb"))
-        (.my.i18n:)
-        (guard (e (#t "deleted")) (.my.i18n))
+        (#.my.i18n: "nb")
+        (assert (equal? (#.my.i18n) "nb"))
+        (#.my.i18n:)
+        (guard (e (#t "deleted")) (#.my.i18n))
     "#;
 
     let (value, _) = eval(source).unwrap();
@@ -165,10 +165,19 @@ fn unit_evaluator_rejects_hash_slash_my_config() {
 }
 
 #[test]
+fn unit_evaluator_rejects_bare_dot_my_config() {
+    let error = match eval("(.my.i18n)") {
+        Ok((value, _)) => panic!("expected bare .my config to fail, got {}", value.display()),
+        Err(error) => error,
+    };
+    assert!(!error.to_string().is_empty());
+}
+
+#[test]
 fn unit_include_loads_from_dot_config_path() {
     let source = r#"
-        (.my.doc.lib: "(define (triple x) (* x 3))")
-        (include ".my.doc.lib")
+        (#.my.doc.lib: "(define (triple x) (* x 3))")
+        (include #.my.doc.lib)
         (triple 14)
     "#;
 
@@ -178,7 +187,7 @@ fn unit_include_loads_from_dot_config_path() {
 
 #[test]
 fn unit_stdlib_provides_list_accessors() {
-    let stdlib = fs::read_to_string("stdlib.zscm").unwrap();
+    let stdlib = fs::read_to_string("stdlib.zscheme").unwrap();
     let source = format!(
         r#"
         {stdlib}
@@ -214,9 +223,9 @@ fn unit_display_and_newline_route_to_host_output() {
 #[test]
 fn unit_dot_subtree_listing_returns_dot_paths() {
     let source = r#"
-        (.my.aliases.sky: "did:ma:sky")
-        (.my.aliases.ms: "did:ma:ms")
-        (.my.aliases)
+        (#.my.aliases.sky: "did:ma:sky")
+        (#.my.aliases.ms: "did:ma:ms")
+        (#.my.aliases)
     "#;
 
     let (value, _) = eval(source).unwrap();
@@ -226,7 +235,7 @@ fn unit_dot_subtree_listing_returns_dot_paths() {
 #[test]
 fn unit_dot_alias_storage_feeds_target_resolution() {
     let source = r#"
-        (.my.aliases.sky: "did:ma:sky")
+        (#.my.aliases.sky: "did:ma:sky")
     "#;
 
     let (_, test_ctx) = eval(source).unwrap();
@@ -242,7 +251,7 @@ fn functional_scheme_programs_pass() {
         .unwrap()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zcm"))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zscheme"))
         .collect();
 
     let functional_dir = Path::new("tests/functional");
@@ -252,14 +261,14 @@ fn functional_scheme_programs_pass() {
                 .unwrap()
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
-                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zcm")),
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zscheme")),
         );
     }
 
     paths.sort();
     assert!(
         !paths.is_empty(),
-        "expected at least one functional .zcm test"
+        "expected at least one functional .zscheme test"
     );
 
     for path in paths {

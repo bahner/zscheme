@@ -1,6 +1,4 @@
-; Functional zscheme test: store scripts in .my docs and include them.
-
-(.my.doc.math: "
+(#.my.doc.math: "
 (define (sum-list xs)
   (fold + 0 xs))
 
@@ -11,7 +9,7 @@
   (if (> n 0) n (error \"not positive\")))
 ")
 
-(include ".my.doc.math")
+(include "#.my.doc.math")
 
 (assert (= (sum-list '(4 8 12)) 24))
 (assert (= (average '(4 8 12)) 8))

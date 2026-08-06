@@ -1,5 +1,3 @@
-; Functional zscheme test: parse ma world addresses and build actor targets.
-
 (define (parse-address addr)
   (let* ((at (string-index addr "@"))
          (hash (string-index addr "#"))

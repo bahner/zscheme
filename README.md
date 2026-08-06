@@ -16,7 +16,7 @@ before normal dispatch. Results are spliced back as strings into the command.
 
 ```scheme
 ; Inline substitution — result becomes part of the command
-(.my.aliases.sky)#room:look ((string-append "north" " gate"))
+(#.my.aliases.sky)#room:look ((string-append "north" " gate"))
 
 ; Standalone expressions
 (+ 7 5)                               ; → 12
@@ -84,9 +84,9 @@ It runs until logout/reboot or `zscheme --stop`.
 ### Config lookups
 
 ```scheme
-(.my.aliases.sky)                      ; returns stored DID
-(.my.config.colour.text)               ; returns colour string
-(.my.config.k: "value")               ; sets a config key
+(#.my.aliases.sky)                      ; returns stored DID
+(#.my.config.colour.text)               ; returns colour string
+(#.my.config.k: "value")               ; sets a config key
 ```
 
 ### Actor RPC
