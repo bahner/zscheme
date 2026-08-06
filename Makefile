@@ -1,6 +1,4 @@
-MA_FILES  := $(wildcard *.ma)
 MD_FILES  := $(wildcard *.md)
-CID_FILES := $(MA_FILES:.ma=.cid)
 
 PREFIX    ?= /usr/local
 BINDIR    ?= $(PREFIX)/bin
@@ -40,26 +38,13 @@ fmt:
 fmt-check:
 	cargo fmt --all --check
 
-# ── IPFS ──────────────────────────────────────────────────────────────────────
+# ── IPFS libraries ────────────────────────────────────────────────────────────
 
-# Publish all .ma files to IPFS and write their CIDs to matching .cid files.
-publish: $(CID_FILES)
+publish:
+	$(MAKE) -C lib publish
 
-%.cid: %.ma
-	@echo "Publishing $<…"
-	@ipfs add -q --cid-version 1 "$<" | tee "$@"
-	@echo "  → $< : $$(cat $@)"
-
-# Print all stored CIDs.
 cids:
-	@for f in $(CID_FILES); do \
-		name=$$(basename $$f .cid); \
-		if [ -f "$$f" ]; then \
-			printf '%-30s %s\n' "$$name" "$$(cat $$f)"; \
-		else \
-			printf '%-30s (not published)\n' "$$name"; \
-		fi; \
-	done
+	$(MAKE) -C lib cids
 
 clean:
-	@echo "Nothing to clean (keep .cid files in repo)"
+	$(MAKE) -C lib clean

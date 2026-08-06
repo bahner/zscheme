@@ -217,7 +217,7 @@ Others load it with:
 The address format `alias@runtime#room` encodes an avatar alias, a runtime
 alias, and a room fragment in a single string.
 
-Store a navigation script (see `stdlib.ma` for `string-index`, `string-split`):
+Store a navigation script (see [`lib/stdlib.zscheme`](lib/stdlib.zscheme) for `string-index`, `string-split`):
 
 ```scheme
 ; .my.doc.world.ma — save with !edit, load with !eval

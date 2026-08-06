@@ -187,7 +187,7 @@ fn unit_include_loads_from_dot_config_path() {
 
 #[test]
 fn unit_stdlib_provides_list_accessors() {
-    let stdlib = fs::read_to_string("stdlib.zscheme").unwrap();
+    let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
     let source = format!(
         r#"
         {stdlib}

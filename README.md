@@ -167,13 +167,28 @@ Auto-load at login:
 
 ---
 
-## Loading the stdlib
+## Loading libraries
 
-The stdlib (`stdlib.ma`) provides list helpers such as `map`, `filter`,
+The stdlib ([`lib/stdlib.zscheme`](lib/stdlib.zscheme)) provides list helpers such as `map`, `filter`,
 `fold`, `take`, `drop`, `member`, and `contains?`; string helpers such as
 `string-split` and `string-join`; and associative map helpers such as
 `make-map`, `map-ref`, `map-set`, `map-delete`, `map-keys`, `map-values`,
 `map->alist`, and `alist->map`.
+
+Publish all libraries and generate the combined loader with:
+
+```sh
+make publish
+cat lib/my.scheme.cid
+```
+
+Set `.my.scheme` in Zion to the resulting CID:
+
+```scheme
+.my.scheme: (include #/ipfs/<my-scheme-cid>)
+```
+
+The published `lib/my.scheme` includes both the stdlib and runtime helpers.
 
 ```
 ; In zion:
@@ -190,7 +205,7 @@ The stdlib (`stdlib.ma`) provides list helpers such as `map`, `filter`,
 
 | File | Description |
 |---|---|
-| [`stdlib.ma`](stdlib.ma) | Standard library — pure zscheme implementations |
+| [`lib/`](lib/) | Published stdlib, runtime helpers, and combined loader |
 | [`REFERENCE.md`](REFERENCE.md) | Complete language reference |
 | [`HANDBOOK.md`](HANDBOOK.md) | Practical user handbook |
 
