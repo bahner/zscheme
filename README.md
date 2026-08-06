@@ -60,6 +60,13 @@ The auto-spawned daemon inherits `MA_SECRET_BUNDLE_PASSPHRASE` from the
 client's environment and logs to `~/.local/share/ma/zscheme-daemon.log`.
 It runs until logout/reboot or `zscheme --stop`.
 
+Before the daemon accepts clients, it publishes its DID document through the
+configured local Kubo RPC endpoint. It republishes hourly so the document stays
+reachable as an RPC target. The local pin is retained as one archive per UTC
+day, named `ma-zscheme-<slug>-<blake3>-YYYY-MM-DD`. When `pin_remote: true`
+and `pin_remote_service` are configured in `zscheme.yaml`, the same daily
+archive is sent to that remote pinning service.
+
 ---
 
 ## Quick start

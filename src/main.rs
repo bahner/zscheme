@@ -13,10 +13,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ma_core::config::{Config, MaArgs, SecretBundle};
-use ma_core::{IpfsGatewayResolver, RPC_PROTOCOL_ID};
+use ma_core::ipfs::{DidDocumentPublishOptions, IpfsDidPublisher, RemotePinOptions};
+use ma_core::{IpfsGatewayResolver, MaExtension, RPC_PROTOCOL_ID};
 use tokio::task::spawn_local;
 use tracing::{info, warn};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::context::{CliCtx, CliCtxInit, Ctx};
 use crate::scheme::init_session_env;
@@ -24,6 +25,7 @@ use ma_zscheme_yaml::SchemeConfig;
 
 const ZSCHEME_SLUG: &str = "zscheme";
 const DEFAULT_GATEWAY_URL: &str = "https://dweb.link";
+const DID_REPUBLISH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // ── CLI ────────────────────────────────────────────────────────────────────
 
@@ -141,6 +143,7 @@ async fn main() -> Result<()> {
     };
 
     let mut secrets = load_secret_bundle(&core_config)?;
+    let publication_secrets = is_daemon.then(|| secrets.clone());
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
     let mut endpoint = ma_core::new_ma_endpoint(secrets.iroh_secret_key, true).await?;
@@ -149,15 +152,18 @@ async fn main() -> Result<()> {
     // ── DID document ────────────────────────────────────────────────────────
     let ma_ext = endpoint.ma_extension().kind("agent");
     let our_document = secrets
-        .build_document(ma_ext)
+        .build_document(ma_ext.clone())
         .context("failed to build DID document")?;
     let our_did = our_document.id.clone();
     info!(did = %our_did, "zscheme identity ready");
 
+    publish_did_document(&core_config, &our_document, &secrets.ipns_secret_key).await?;
+
     // Box the endpoint now that service() and ma_extension() are done.
     // (new_ma_endpoint already returns Box<dyn MaEndpoint>; no re-boxing needed.)
 
-    // Zeroize key material we no longer need.
+    // Zeroize key material we no longer need. Daemon mode retains its separate
+    // publication bundle so it can re-sign the current document periodically.
     secrets.ipns_secret_key.zeroize();
 
     // ── Scheme data config ──────────────────────────────────────────────────
@@ -185,6 +191,11 @@ async fn main() -> Result<()> {
     // ── Run in LocalSet (required for Rc<…> + LocalBoxFuture) ─────────────
     let local = tokio::task::LocalSet::new();
     if is_daemon {
+        spawn_periodic_did_publish(
+            core_config.clone(),
+            ma_ext,
+            publication_secrets.expect("daemon publication bundle"),
+        );
         local
             .run_until(daemon_main(ctx, img, cli.rpc_poll_ms))
             .await
@@ -241,6 +252,102 @@ fn spawn_rpc_poll_loop(ctx: std::rc::Rc<CliCtx>, poll_ms: u64) {
             ctx.poll_rpc_replies();
         }
     });
+}
+
+/// Publish the current DID document and retain one named archive pin per UTC day.
+async fn publish_did_document(
+    config: &Config,
+    document: &ma_core::Document,
+    ipns_secret_key: &[u8; 32],
+) -> Result<()> {
+    let document_cbor = document
+        .encode()
+        .context("failed to encode DID document for publication")?;
+    let publisher = IpfsDidPublisher::new(&config.kubo_rpc_url)
+        .with_context(|| format!("invalid kubo_rpc_url: {}", config.kubo_rpc_url))?;
+    publisher
+        .wait_until_ready(10)
+        .await
+        .context("Kubo RPC is not reachable for DID publication")?;
+
+    let daily_pin_name = daily_did_pin_name(&config.slug, &document.id);
+    let remote_pin = config
+        .remote_pin_config_with_default_name(&daily_pin_name)
+        .context("remote DID pinning is misconfigured")?
+        .map(|remote| RemotePinOptions {
+            service: remote.service,
+            // DID archive naming is fixed so repeated publishes retain one
+            // document per day locally and on the configured remote service.
+            name: daily_pin_name.clone(),
+        });
+    let options = DidDocumentPublishOptions {
+        key_parts: vec!["zscheme".to_string(), config.slug.clone()],
+        remote_pin,
+        overwrite: true,
+        ..DidDocumentPublishOptions::default()
+    };
+
+    let publication = publisher
+        .publish_document(
+            document_cbor,
+            Zeroizing::new(ipns_secret_key.to_vec()),
+            options,
+        )
+        .await
+        .context("failed to publish DID document")?;
+    info!(
+        did = %document.id,
+        cid = %publication.cid,
+        key = %publication.key_name,
+        archive_pin = %daily_pin_name,
+        "zscheme DID document published"
+    );
+    Ok(())
+}
+
+fn spawn_periodic_did_publish(
+    config: Config,
+    ma_ext: MaExtension,
+    publication_secrets: SecretBundle,
+) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(DID_REPUBLISH_INTERVAL);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let result = publication_secrets
+                .build_document(ma_ext.clone())
+                .map_err(anyhow::Error::from);
+            match result {
+                Ok(document) => {
+                    if let Err(error) = publish_did_document(
+                        &config,
+                        &document,
+                        &publication_secrets.ipns_secret_key,
+                    )
+                    .await
+                    {
+                        warn!(error = %format!("{error:#}"), "periodic zscheme DID publication failed");
+                    }
+                }
+                Err(error) => {
+                    warn!(error = %format!("{error:#}"), "periodic zscheme DID document build failed");
+                }
+            }
+        }
+    });
+}
+
+fn daily_did_pin_name(slug: &str, did: &str) -> String {
+    let date = time::OffsetDateTime::now_utc().date();
+    let digest = blake3::hash(did.as_bytes()).to_hex();
+    format!(
+        "ma-zscheme-{slug}-{}-{:04}-{:02}-{:02}",
+        &digest[..16],
+        date.year(),
+        u8::from(date.month()),
+        date.day(),
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
