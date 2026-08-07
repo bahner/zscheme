@@ -277,7 +277,10 @@ async fn eval_request(
     })));
 
     let scheme_ctx: Ctx = ctx.clone();
-    let result = if isolated {
+    let result = if crate::scheme::is_dot_command_line(source) {
+        // Dot commands act on host config, not the Scheme environment.
+        crate::scheme::eval_dot_line(source, &scheme_ctx)
+    } else if isolated {
         let env = isolated_env
             .get_or_insert_with(ma_zscheme::Env::new_root)
             .clone();

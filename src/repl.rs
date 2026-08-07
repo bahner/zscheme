@@ -3,7 +3,7 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 use crate::context::Ctx;
-use crate::scheme::{eval_source, SchemeVal};
+use crate::scheme::{eval_line, SchemeVal};
 
 const PROMPT: &str = "zscheme> ";
 const PROMPT_CONT: &str = "    ... ";
@@ -22,7 +22,7 @@ pub struct LocalEval(pub Ctx);
 
 impl ReplEval for LocalEval {
     async fn eval(&mut self, source: &str) -> Result<Option<String>, String> {
-        match eval_source(source, self.0.clone()).await {
+        match eval_line(source, self.0.clone()).await {
             Ok(SchemeVal::Nil) => Ok(None),
             Ok(val) => Ok(Some(val.display())),
             Err(e) => Err(crate::daemon::format_scheme_err(&e)),

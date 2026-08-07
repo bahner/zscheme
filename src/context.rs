@@ -145,7 +145,10 @@ impl SchemeCtx for CliCtx {
                 } else {
                     let pairs = self.config.borrow().list(&path);
                     if pairs.is_empty() {
-                        Err(SchemeErr::MaError(format!("no value at /{path}")))
+                        Err(SchemeErr::MaError(format!(
+                            "no value at .{}",
+                            path.replace('/', ".")
+                        )))
                     } else {
                         Ok(SchemeVal::List(
                             pairs.into_iter().map(|(k, _)| SchemeVal::Str(k)).collect(),
@@ -162,7 +165,10 @@ impl SchemeCtx for CliCtx {
                 Ok(SchemeVal::Nil)
             }
             DotOp::Meta { verb, args } => {
-                tracing::warn!("path meta-verb /{path}!{verb} {args}: not yet supported in CLI");
+                tracing::warn!(
+                    "path meta-verb .{}!{verb} {args}: not yet supported in CLI",
+                    path.replace('/', ".")
+                );
                 Ok(SchemeVal::Nil)
             }
         }
