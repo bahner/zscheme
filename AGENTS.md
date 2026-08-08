@@ -4,7 +4,16 @@
 
 - Never modify files outside this workspace without explicit user approval.
 - Use British English for project-owned names and prose.
-- Keep `ma-core` and `ma-zscheme` as published dependencies; do not commit local path dependencies.
+- Keep `ma-core` `^0.14.4` or newer and `ma-zscheme` as published dependencies; do not commit local path dependencies.
+
+## DID document publication
+
+- Canonicalise a loaded bundle's legacy `created_at` to RFC 3339 UTC
+	whole-second form and persist the migrated bundle before building documents.
+- Use `SecretBundle::build_document` so `updatedAt` is renewed and the final
+	extension data is covered by the proof.
+- Call `Document::validate()` and `Document::verify()` immediately before every
+	direct `IpfsDidPublisher::publish_document` call.
 
 ## Scheme host contract
 

@@ -20,7 +20,7 @@ blake3 = "1"
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
-ma-core = { version = "^0.14", default-features = false, features = ["config", "iroh", "kubo"] }
+ma-core = { version = "^0.14.4", default-features = false, features = ["config", "iroh", "kubo"] }
 ma-zscheme = "0.5"
 ma-zscheme-yaml = "0.5"
 directories = "5"
@@ -28,7 +28,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 rustyline = "14"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-time = "0.3"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "io-util", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

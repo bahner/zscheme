@@ -15,6 +15,7 @@ use clap::Parser;
 use ma_core::config::{Config, MaArgs, SecretBundle};
 use ma_core::ipfs::{DidDocumentPublishOptions, IpfsDidPublisher, RemotePinOptions};
 use ma_core::{IpfsGatewayResolver, MaExtension, RPC_PROTOCOL_ID};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 use tokio::task::spawn_local;
 use tracing::{info, warn};
 use zeroize::{Zeroize, Zeroizing};
@@ -266,6 +267,12 @@ async fn publish_did_document(
     document: &ma_core::Document,
     ipns_secret_key: &[u8; 32],
 ) -> Result<()> {
+    document
+        .validate()
+        .context("DID document failed validation before publication")?;
+    document
+        .verify()
+        .context("DID document proof failed verification before publication")?;
     let document_cbor = document
         .encode()
         .context("failed to encode DID document for publication")?;
@@ -364,10 +371,44 @@ fn load_secret_bundle(config: &Config) -> Result<SecretBundle> {
         .as_deref()
         .ok_or_else(|| anyhow!("secret_bundle_passphrase is required (set MA_SECRET_BUNDLE_PASSPHRASE or add it to {ZSCHEME_SLUG}.yaml)"))?;
     let bundle_path = config.effective_secret_bundle()?;
-    SecretBundle::load(&bundle_path, passphrase).with_context(|| {
+    let mut bundle = SecretBundle::load(&bundle_path, passphrase).with_context(|| {
         format!(
             "failed to load secret bundle from {}",
             bundle_path.display()
         )
-    })
+    })?;
+    let canonical_created_at = canonicalise_created_at(&bundle.created_at)?;
+    if canonical_created_at != bundle.created_at {
+        bundle.created_at = canonical_created_at;
+        bundle.save(&bundle_path, passphrase).with_context(|| {
+            format!(
+                "failed to persist migrated secret bundle to {}",
+                bundle_path.display()
+            )
+        })?;
+    }
+    Ok(bundle)
+}
+
+fn canonicalise_created_at(value: &str) -> Result<String> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .context("invalid secret bundle created_at")?
+        .to_offset(UtcOffset::UTC)
+        .replace_nanosecond(0)
+        .context("invalid secret bundle created_at")?
+        .format(&Rfc3339)
+        .context("format secret bundle created_at")
+}
+
+#[cfg(test)]
+mod did_document_tests {
+    use super::canonicalise_created_at;
+
+    #[test]
+    fn canonicalises_legacy_fractional_created_at() {
+        assert_eq!(
+            canonicalise_created_at("2026-07-19T19:45:24.489Z").unwrap(),
+            "2026-07-19T19:45:24Z"
+        );
+    }
 }
