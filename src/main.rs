@@ -7,7 +7,7 @@ mod repl;
 mod scheme;
 mod transport;
 
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -144,9 +144,16 @@ async fn main() -> Result<()> {
 
     let mut secrets = load_secret_bundle(&core_config)?;
     let publication_secrets = is_daemon.then(|| secrets.clone());
+    let resolver = Arc::new(IpfsGatewayResolver::local_first(&cli.gateway));
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
-    let mut endpoint = ma_core::new_ma_endpoint(secrets.iroh_secret_key, true).await?;
+    let mut endpoint = ma_core::new_ma_endpoint(
+        secrets.iroh_secret_key,
+        secrets.encryption_key()?,
+        resolver.clone(),
+        true,
+    )
+    .await?;
     let rpc_inbox = endpoint.service(RPC_PROTOCOL_ID);
 
     // ── DID document ────────────────────────────────────────────────────────
@@ -172,7 +179,6 @@ async fn main() -> Result<()> {
 
     // ── Build CliCtx ────────────────────────────────────────────────────────
     // Local-first pool: localhost gateway, then --gateway, then public fallbacks.
-    let resolver = Rc::new(IpfsGatewayResolver::local_first(&cli.gateway));
     let signing_key_bytes = secrets.did_signing_key;
 
     let ctx = CliCtx::new(CliCtxInit {

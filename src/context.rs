@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::{channel::oneshot, future::LocalBoxFuture};
@@ -27,7 +28,7 @@ pub struct CliCtx {
     /// iroh endpoint for sending/receiving messages.
     pub endpoint: tokio::sync::Mutex<Box<dyn ma_core::MaEndpoint>>,
     /// DID resolver for looking up actor endpoints.
-    pub resolver: Rc<IpfsGatewayResolver>,
+    pub resolver: Arc<IpfsGatewayResolver>,
     /// Pending RPC reply senders keyed by message id.
     pub reply_senders: RefCell<HashMap<String, oneshot::Sender<Result<SchemeVal, String>>>>,
 
@@ -53,7 +54,7 @@ pub struct CliCtxInit {
     /// iroh endpoint for transport.
     pub endpoint: Box<dyn ma_core::MaEndpoint>,
     /// DID resolver for target lookup.
-    pub resolver: Rc<IpfsGatewayResolver>,
+    pub resolver: Arc<IpfsGatewayResolver>,
     /// RPC inbox for receiving replies.
     pub rpc_inbox: ma_core::Inbox<Message>,
     /// Kubo RPC base URL.
