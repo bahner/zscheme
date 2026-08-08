@@ -113,6 +113,37 @@ impl CliCtx {
             .map_err(|error| error.to_string())
     }
 
+    /// Build a `SigningKey` and return it together with the sender DID-URL.
+    fn build_signing_key(&self, fragment: &str) -> Result<(String, SigningKey), String> {
+        let sender = self.sender_url(fragment)?;
+        let signing_did = Did::try_from(sender.as_str()).map_err(|e| e.to_string())?;
+        let signing_key = SigningKey::from_private_key_bytes(signing_did, self.signing_key_bytes)
+            .map_err(|e| e.to_string())?;
+        Ok((sender, signing_key))
+    }
+
+    /// Send an RPC to `target#verb(args)` and await the reply.
+    async fn do_rpc_call(
+        &self,
+        target: &str,
+        verb: &str,
+        args: &[SchemeVal],
+    ) -> Result<SchemeVal, SchemeErr> {
+        let msg_id = self
+            .send_rpc(target, verb, args)
+            .await
+            .map_err(SchemeErr::MaError)?;
+        let (sender, receiver) = oneshot::channel::<Result<SchemeVal, String>>();
+        self.register_reply_sender(msg_id, sender);
+        match receiver.await {
+            Ok(Ok(val)) => Ok(val),
+            Ok(Err(e)) => Err(SchemeErr::MaError(e)),
+            Err(_) => Err(SchemeErr::MaError(
+                "RPC reply channel cancelled".to_string(),
+            )),
+        }
+    }
+
     /// Drain the RPC inbox and route replies to waiting `oneshot` senders.
     /// Call periodically from the poll loop in main.rs.
     pub fn poll_rpc_replies(&self) {
@@ -205,20 +236,13 @@ impl SchemeCtx for CliCtx {
     // ── Async ─────────────────────────────────────────────────────────────
 
     fn fetch_path<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
-        let kubo_url = format!(
-            "{}/api/v0/cat?arg={}",
-            self.kubo_rpc_url.trim_end_matches('/'),
-            path
-        );
         let http = self.http.clone();
         let resolver = self.resolver.clone();
+        let kubo_rpc_url = self.kubo_rpc_url.clone();
         let path = path.to_string();
         Box::pin(async move {
-            match http.post(&kubo_url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    return resp.text().await.map_err(|e| e.to_string());
-                }
-                _ => {}
+            if let Some(resp) = try_kubo_cat(&http, &kubo_rpc_url, &path).await {
+                return resp.text().await.map_err(|e| e.to_string());
             }
             resolver
                 .pool()
@@ -230,24 +254,17 @@ impl SchemeCtx for CliCtx {
     }
 
     fn fetch_bytes<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>, String>> {
-        let kubo_url = format!(
-            "{}/api/v0/cat?arg={}",
-            self.kubo_rpc_url.trim_end_matches('/'),
-            path
-        );
         let http = self.http.clone();
         let resolver = self.resolver.clone();
+        let kubo_rpc_url = self.kubo_rpc_url.clone();
         let path = path.to_string();
         Box::pin(async move {
-            match http.post(&kubo_url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    return response
-                        .bytes()
-                        .await
-                        .map(|bytes| bytes.to_vec())
-                        .map_err(|error| error.to_string());
-                }
-                _ => {}
+            if let Some(resp) = try_kubo_cat(&http, &kubo_rpc_url, &path).await {
+                return resp
+                    .bytes()
+                    .await
+                    .map(|b| b.to_vec())
+                    .map_err(|e| e.to_string());
             }
             resolver.pool().fetch_bytes(&path, None).await
         })
@@ -269,33 +286,13 @@ impl SchemeCtx for CliCtx {
         command: &'a str,
     ) -> LocalBoxFuture<'a, Result<SchemeVal, SchemeErr>> {
         Box::pin(async move {
-            let effective = if command.starts_with('@') || command.starts_with("did:") {
-                command.to_string()
-            } else {
-                format!("@{command}")
-            };
-
+            let effective = normalize_actor_str(command);
             let (target, verb, str_args) = {
                 let cfg = self.config.borrow();
                 parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
             };
             let scheme_args: Vec<SchemeVal> = str_args.into_iter().map(SchemeVal::Str).collect();
-
-            let msg_id = self
-                .send_rpc(&target, &verb, &scheme_args)
-                .await
-                .map_err(SchemeErr::MaError)?;
-
-            let (sender, receiver) = oneshot::channel::<Result<SchemeVal, String>>();
-            self.register_reply_sender(msg_id, sender);
-
-            match receiver.await {
-                Ok(Ok(val)) => Ok(val),
-                Ok(Err(e)) => Err(SchemeErr::MaError(e)),
-                Err(_) => Err(SchemeErr::MaError(
-                    "RPC reply channel cancelled".to_string(),
-                )),
-            }
+            self.do_rpc_call(&target, &verb, &scheme_args).await
         })
     }
 
@@ -305,34 +302,12 @@ impl SchemeCtx for CliCtx {
         args: &'a [SchemeVal],
     ) -> LocalBoxFuture<'a, Result<SchemeVal, SchemeErr>> {
         Box::pin(async move {
-            let effective = if actor.starts_with('@') || actor.starts_with("did:") {
-                actor.to_string()
-            } else {
-                format!("@{actor}")
-            };
-
-            // Parse target+verb from the actor string; ignore any string args
-            // (the SchemeVal args are passed directly to send_rpc).
+            let effective = normalize_actor_str(actor);
             let (target, verb, _) = {
                 let cfg = self.config.borrow();
                 parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
             };
-
-            let msg_id = self
-                .send_rpc(&target, &verb, args)
-                .await
-                .map_err(SchemeErr::MaError)?;
-
-            let (sender, receiver) = oneshot::channel::<Result<SchemeVal, String>>();
-            self.register_reply_sender(msg_id, sender);
-
-            match receiver.await {
-                Ok(Ok(val)) => Ok(val),
-                Ok(Err(e)) => Err(SchemeErr::MaError(e)),
-                Err(_) => Err(SchemeErr::MaError(
-                    "RPC reply channel cancelled".to_string(),
-                )),
-            }
+            self.do_rpc_call(&target, &verb, args).await
         })
     }
 
@@ -345,19 +320,10 @@ impl SchemeCtx for CliCtx {
         if let Err(error) = Did::validate_url(target) {
             return Box::pin(futures::future::ready(Err(error.to_string())));
         }
-        let sender = match self.sender_url("rpc") {
-            Ok(sender) => sender,
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
+        let (sender, signing_key) = match self.build_signing_key("rpc") {
+            Ok(pair) => pair,
+            Err(e) => return Box::pin(futures::future::ready(Err(e))),
         };
-        let signing_did = match Did::try_from(sender.as_str()) {
-            Ok(did) => did,
-            Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-        };
-        let signing_key =
-            match SigningKey::from_private_key_bytes(signing_did, self.signing_key_bytes) {
-                Ok(k) => k,
-                Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-            };
         let atom = if verb.starts_with(':') {
             verb.to_string()
         } else {
@@ -413,19 +379,10 @@ impl SchemeCtx for CliCtx {
         if let Err(error) = Did::validate_url(target) {
             return Box::pin(futures::future::ready(Err(error.to_string())));
         }
-        let sender = match self.sender_url("inbox") {
-            Ok(sender) => sender,
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
+        let (sender, signing_key) = match self.build_signing_key("inbox") {
+            Ok(pair) => pair,
+            Err(e) => return Box::pin(futures::future::ready(Err(e))),
         };
-        let signing_did = match Did::try_from(sender.as_str()) {
-            Ok(did) => did,
-            Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-        };
-        let signing_key =
-            match SigningKey::from_private_key_bytes(signing_did, self.signing_key_bytes) {
-                Ok(k) => k,
-                Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-            };
         let msg = match ma_core::Message::new(
             &sender,
             target,
@@ -451,6 +408,35 @@ impl SchemeCtx for CliCtx {
             outbox.send(&msg).await.map_err(|e| e.to_string())?;
             Ok(msg_id)
         })
+    }
+}
+
+// ── Private helpers ────────────────────────────────────────────────────────
+
+/// Try fetching `path` from the local Kubo daemon; returns the response on
+/// success so the caller can deserialise it as text or bytes.
+async fn try_kubo_cat(
+    http: &reqwest::Client,
+    kubo_rpc_url: &str,
+    path: &str,
+) -> Option<reqwest::Response> {
+    let url = format!(
+        "{}/api/v0/cat?arg={}",
+        kubo_rpc_url.trim_end_matches('/'),
+        path
+    );
+    match http.post(&url).send().await {
+        Ok(resp) if resp.status().is_success() => Some(resp),
+        _ => None,
+    }
+}
+
+/// Ensure the actor string has a leading `@` or `did:` prefix.
+fn normalize_actor_str(input: &str) -> String {
+    if input.starts_with('@') || input.starts_with("did:") {
+        input.to_string()
+    } else {
+        format!("@{input}")
     }
 }
 
