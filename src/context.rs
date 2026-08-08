@@ -106,6 +106,13 @@ impl CliCtx {
         *self.display_sink.borrow_mut() = sink;
     }
 
+    fn sender_url(&self, fragment: &str) -> Result<String, String> {
+        let did = Did::try_from(self.our_did.as_str()).map_err(|error| error.to_string())?;
+        did.with_fragment(fragment)
+            .map(|url| url.id())
+            .map_err(|error| error.to_string())
+    }
+
     /// Drain the RPC inbox and route replies to waiting `oneshot` senders.
     /// Call periodically from the poll loop in main.rs.
     pub fn poll_rpc_replies(&self) {
@@ -335,14 +342,22 @@ impl SchemeCtx for CliCtx {
         verb: &'a str,
         args: &'a [SchemeVal],
     ) -> LocalBoxFuture<'a, Result<String, String>> {
-        let did = match Did::try_from(target) {
-            Ok(d) => d,
+        if let Err(error) = Did::validate_url(target) {
+            return Box::pin(futures::future::ready(Err(error.to_string())));
+        }
+        let sender = match self.sender_url("rpc") {
+            Ok(sender) => sender,
+            Err(error) => return Box::pin(futures::future::ready(Err(error))),
+        };
+        let signing_did = match Did::try_from(sender.as_str()) {
+            Ok(did) => did,
             Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
         };
-        let signing_key = match SigningKey::from_private_key_bytes(did, self.signing_key_bytes) {
-            Ok(k) => k,
-            Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-        };
+        let signing_key =
+            match SigningKey::from_private_key_bytes(signing_did, self.signing_key_bytes) {
+                Ok(k) => k,
+                Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
+            };
         let atom = if verb.starts_with(':') {
             verb.to_string()
         } else {
@@ -363,7 +378,7 @@ impl SchemeCtx for CliCtx {
             return Box::pin(futures::future::ready(Err(e.to_string())));
         }
         let msg = match ma_core::Message::new(
-            &self.our_did,
+            &sender,
             target,
             ma_core::MESSAGE_TYPE_RPC,
             ma_core::CONTENT_TYPE_TERM,
@@ -395,16 +410,24 @@ impl SchemeCtx for CliCtx {
         body: &'a str,
     ) -> LocalBoxFuture<'a, Result<String, String>> {
         use ma_core::{INBOX_PROTOCOL_ID, MESSAGE_TYPE_MESSAGE};
-        let did = match Did::try_from(target) {
-            Ok(d) => d,
+        if let Err(error) = Did::validate_url(target) {
+            return Box::pin(futures::future::ready(Err(error.to_string())));
+        }
+        let sender = match self.sender_url("inbox") {
+            Ok(sender) => sender,
+            Err(error) => return Box::pin(futures::future::ready(Err(error))),
+        };
+        let signing_did = match Did::try_from(sender.as_str()) {
+            Ok(did) => did,
             Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
         };
-        let signing_key = match SigningKey::from_private_key_bytes(did, self.signing_key_bytes) {
-            Ok(k) => k,
-            Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
-        };
+        let signing_key =
+            match SigningKey::from_private_key_bytes(signing_did, self.signing_key_bytes) {
+                Ok(k) => k,
+                Err(e) => return Box::pin(futures::future::ready(Err(e.to_string()))),
+            };
         let msg = match ma_core::Message::new(
-            &self.our_did,
+            &sender,
             target,
             MESSAGE_TYPE_MESSAGE,
             "text/plain",
