@@ -3,7 +3,7 @@ MD_FILES  := $(wildcard *.md)
 PREFIX    ?= /usr/local
 BINDIR    ?= $(PREFIX)/bin
 
-.PHONY: all build check test release install lint fmt fmt-check publish cids clean
+.PHONY: all build check test release install lint fmt fmt-check publish zscheme-cid cids clean
 
 all: build
 
@@ -42,6 +42,9 @@ fmt-check:
 
 publish:
 	$(MAKE) -C lib publish
+
+zscheme-cid:
+	$(MAKE) -C lib zscheme-cid
 
 cids:
 	$(MAKE) -C lib cids

@@ -1,0 +1,134 @@
+; zscheme event library.
+; Load stdlib, runtime, and avatar before this file.
+; This layer owns both structured-data presentation and unsolicited event
+; dispatch. Avatar commands reuse these formatters for solicited query replies.
+;
+; Keeping text here matters: runtime hands clients data, while this Zion-facing
+; layer decides what a human sees. No string below is part of the wire contract.
+
+;; ── Presentation helpers ────────────────────────────────────────────────────
+
+(define (event-print text)
+  (display text))
+
+(define (event-list-lines title values render)
+  ;; `render` keeps list framing separate from the kind-specific label choice.
+  ;; Empty sections disappear instead of producing decorative blank headings.
+  (let ((entries (event-list-values values)))
+    (if (null? entries)
+      ""
+      (fold (lambda (value text)
+              (string-append text "\n" (render value)))
+            title
+            entries))))
+
+(define (event-exit-name exit)
+  (if (map? exit)
+    (map-ref exit "direction" (event-name exit))
+    exit))
+
+(define (event-who-name entry)
+  (if (pair? entry)
+    (event-name (cadr entry))
+    (event-name entry)))
+
+(define (event-exit-lines title exits)
+  (let ((entries (cond ((map? exits) (map-keys exits))
+                       ((list? exits) exits)
+                       (else '()))))
+    (if (null? entries)
+      ""
+      (fold (lambda (exit text)
+              (string-append text "\n" (event-exit-name exit)))
+            title
+            entries))))
+
+(define (event-look room)
+  ;; A room snapshot is already the complete presentation model. Rendering it
+  ;; needs no extra RPC and must not mutate the avatar's cached snapshot.
+  (let ((name (map-ref room "name" (event-name room)))
+        (description (map-ref room "description" ""))
+        (who (map-ref room "who" '()))
+        (occupants (map-ref room "agents" '()))
+        (things (map-ref room "things" '()))
+        (exits (map-ref room "exits" '())))
+    (display
+      (string-append
+        name
+        (if (string? description) (string-append "\n" description) "")
+        (event-list-lines "\nHere:" who event-name)
+        (event-list-lines "\nOccupants:" occupants event-name)
+        (event-list-lines "\nThings:" things event-name)
+        (event-exit-lines "\nExits:" exits)))))
+
+(define (event-exits exits)
+  (display (string-append "Exits:" (event-exit-lines "" exits))))
+
+(define (event-who occupants)
+  (display (string-append "Here:" (event-list-lines "" occupants event-who-name))))
+
+(define (event-occupants occupants)
+  (display (string-append "Occupants:" (event-list-lines "" occupants event-name))))
+
+(define (event-things things)
+  (display (string-append "Things:" (event-list-lines "" things event-name))))
+
+(define (event-arrive ctx)
+  (display (string-append (event-name ctx) " arrives.")))
+
+(define (event-leave ctx)
+  (display (string-append (event-name ctx) " leaves.")))
+
+(define (event-say ctx text)
+  (display (string-append (event-name ctx) ": " text)))
+
+(define (event-emote ctx text)
+  (display (string-append (event-name ctx) " " text)))
+
+(define (event-take ctx)
+  (display (string-append (event-name ctx) " takes something.")))
+
+(define (event-drop ctx)
+  (display (string-append (event-name ctx) " drops something.")))
+
+(define (event-dig ctx direction)
+  (display (string-append (event-name ctx) " digs " direction ".")))
+
+(define (event-fill ctx direction)
+  (display (string-append (event-name ctx) " fills " direction ".")))
+
+;; ── Data-directed event dispatch ────────────────────────────────────────────
+;;
+;; Adding a presentation-only event means defining one procedure and adding one
+;; map entry. Events that change room membership/reachability must also join the
+;; invalidation list below.
+
+(define event-handlers
+  (make-map ":print" event-print
+            ":arrive" event-arrive
+            ":leave" event-leave
+            ":say" event-say
+            ":emote" event-emote
+            ":take" event-take
+            ":drop" event-drop
+            ":dig" event-dig
+            ":fill" event-fill))
+
+; Any broadcast that can change who/what is present or reachable in this
+; room — someone else arriving/leaving/taking/dropping/digging/filling —
+; makes the cached `last-room` snapshot (avatar.zscheme) stale. Without this,
+; resolve-room-pool keeps serving the old who/things/exits list forever (it
+; only ever refreshes on a cache miss or an explicit `look`), so hold/take/
+; drop/put/claim/owner/recycle can match a ghost that has since left, or miss
+; someone who just arrived — the intermittent "sometimes 2 duckies, sometimes
+; none" symptom.
+(define room-invalidating-events
+  (list ":arrive" ":leave" ":take" ":drop" ":dig" ":fill"))
+
+(define (on-event event args)
+  ;; Unknown events are ignored: this client may be older than the actor that
+  ;; sent them. Known handlers receive the event's argument list via `apply`.
+  (when (contains? room-invalidating-events event)
+    (set! last-room #f))
+  (let ((handler (map-ref event-handlers event #f)))
+    (if handler (apply handler args) ())))

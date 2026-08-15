@@ -1,86 +1,118 @@
-;; zscheme runtime.ma v0.1
+;; zscheme runtime library v0.1
 ;;
-;; High-level helpers for connecting to a ma runtime.
+;; General helpers for addressing and resolving ma actors.
 ;; Load stdlib first, then this file:
 ;;
-;;   (include ".my.scheme.stdlib.ma")
-;;   (include ".my.scheme.runtime.ma")
+;;   (include ".my.doc.stdlib")
+;;   (include ".my.doc.runtime")
 ;;
-;; Save to .my.scheme.runtime.ma:
-;;   .my.scheme.runtime.ma!edit
+;; Save to .my.doc.runtime:
+;;   .my.doc.runtime!edit
 ;;
-;; Publish:   .my.scheme.runtime.ma!publish @ma
-;; Fetch:     .my.scheme.runtime.ma!fetch /ipfs/<cid>
-
-;; ── Address parsing ───────────────────────────────────────────────────────────
+;; Publish:   .my.doc.runtime!publish @ma
+;; Fetch:     .my.doc.runtime!fetch /ipfs/<cid>
 ;;
-;; Addresses follow the form:  [avatar@]runtime[#room]
+;; This layer understands MA-shaped data but owns no avatar workflow. It turns
+;; actor addresses and ctx maps into reusable values; avatar decides what a
+;; human command should do with them.
+
+;; Call a method on a full actor DID/DID-URL. A string in function position is
+;; the evaluator's actor-call primitive, so this is ordinary Scheme `apply`.
+(define (actor-call actor method . args)
+  (apply (string-append actor ":" method) args))
+
+;; Bare aliases and prose must go through a resolver. Full did:ma: values are
+;; already wire-ready and may pass straight through higher-level helpers.
+(define (starts-with-did? value)
+  (and (string? value)
+       (>= (string-length value) 7)
+       (equal? (substring value 0 7) "did:ma:")))
+
+(define (entry-actor entry)
+  (map-ref entry "actor" (map-ref entry "did" #f)))
+
+;; Presentation code prefers a chosen nick, then a stable name, then an
+;; identifier. Keeping this fallback in runtime gives every client the same
+;; interpretation of a small ctx map.
+(define (event-name ctx)
+  (map-ref ctx "nick"
+    (map-ref ctx "name"
+      (map-ref ctx "did"
+        (map-ref ctx "actor" "(unknown)")))))
+
+(define (event-list-values values)
+  ;; Runtime actors may publish keyed maps or ordered lists. Consumers resolve
+  ;; against one boring list shape instead of branching at every call site.
+  (cond ((map? values) (map-values values))
+        ((list? values) values)
+        (else '())))
+
+(define (find-entry-by-actor pool did)
+  (cond ((null? pool) #f)
+        ((equal? (entry-actor (car pool)) did) (car pool))
+        (else (find-entry-by-actor (cdr pool) did))))
+
+      ;; Preserve the original ctx when available so ambiguity errors can show useful
+      ;; names. A synthetic entry still lets a caller work directly with a DID.
+(define (candidate-for-did pool did)
+  (or (find-entry-by-actor pool did)
+      (make-map "did" did "actor" did)))
+
+;; ── Shared object reference resolver ────────────────────────────────────────
 ;;
-;;   "alice@sky#room"  →  ("alice"  "@sky"  "#room")
-;;   "@sky#room"       →  (#f       "@sky"  "#room")
-;;   "@sky"            →  (#f       "@sky"  #f)
-;;
-;; runtime is always returned with its @ sigil.
-;; room    is always returned with its # sigil, or #f when absent.
+;; Runtime.zscheme is the lambda-ma runtime library home for the shared object
+;; reference contract. `resolve-ref` is runtime-domain code and is not part of
+;; the generic stdlib. The minimum public shape is: a lookup word plus a
+;; candidate pool of ctx maps. The result is a plain list of DID strings only —
+;; one-element list for a unique answer, multi-element list for ambiguity, empty
+;; list for no match. Any presentation layer is a caller concern.
+;; `unique-list` is the generic stdlib helper that resolves duplicates inside the
+;; result set.
 
-(define ENTER  ":enter")
-(define CLAIM  ":claim")
-(define AVATAR "#avatar")
+(define (name-matches? word entry key)
+  ;; Matching is case-insensitive and deliberately accepts substrings. The
+  ;; command boundary, not this data helper, decides whether many hits are an
+  ;; error or a useful result set.
+  (let* ((value (map-ref entry key #f))
+         (needle (string-downcase word))
+         (haystack (if (string? value) (string-downcase value) "")))
+    (and (string? value)
+         (or (equal? needle haystack)
+             (string-contains haystack needle)))))
 
-(define (parse-address addr)
-  (let* ((at-idx  (string-index addr "@"))
-         (hs-idx  (string-index addr "#"))
-         (len     (string-length addr))
-         (avatar  (if (and at-idx (> at-idx 0))
-                      (substring addr 0 at-idx)
-                      #f))
-         (rt-start (if at-idx (+ at-idx 1) 0))
-         (rt-end   (if hs-idx hs-idx len))
-         (runtime  (string-append "@" (substring addr rt-start rt-end)))
-         (room     (if hs-idx (substring addr hs-idx len) #f)))
-    (list avatar runtime room)))
+(define (candidates-by-keys word pool keys)
+  ;; Keys express preference. Stop at the first attribute with any matches so
+  ;; a strong nick match is not diluted by weaker description matches.
+  (if (null? keys)
+    ()
+    (let ((hits (filter (lambda (entry) (name-matches? word entry (car keys))) pool)))
+      (if (null? hits)
+        (candidates-by-keys word pool (cdr keys))
+        hits))))
 
-(define (address-avatar  p) (car   p))
-(define (address-runtime p) (cadr  p))
-(define (address-room    p) (caddr p))
+(define (resolve-in-pool word pool keys)
+  (let ((candidates (candidates-by-keys word pool keys)))
+    (if (null? candidates)
+      ()
+      (map entry-actor candidates))))
 
-;; ── Individual steps ──────────────────────────────────────────────────────────
+(define (resolve-attr word pool attr)
+  (resolve-in-pool word pool (list attr)))
 
-;; Claim (or update) your display name on a runtime.
-;; (claim-alias "@sky" "alice")  →  avatar-id string
-(define (claim-alias runtime name)
-  (let ((r (rpc-send (string-append runtime AVATAR) CLAIM name)))
-    (if (ok? r)
-        (ok-val r)
-        (error (string-append "claim-alias: " (err-msg r))))))
+(define (resolve-name word pool)
+  (resolve-attr word pool "name"))
 
-;; Enter a room directly.
-;; room must include the # sigil, e.g. "#room".
-;; (enter-room "@sky" "#room")  →  room's welcome reply
-(define (enter-room runtime room)
-  (let ((r (rpc-send (string-append runtime room) ENTER)))
-    (if (ok? r)
-        (ok-val r)
-        (error (string-append "enter-room: " (err-msg r))))))
+(define (resolve-nick word pool)
+  (resolve-attr word pool "nick"))
 
-;; ── Composite ─────────────────────────────────────────────────────────────────
-;;
-;; (enter "alice@sky#room")  — claim avatar name, enter room.
-;; (enter "@sky#room")       — skip avatar claim, enter room.
-;;
-;; Returns the room's welcome reply.
-(define (enter addr)
-  (let* ((p       (parse-address addr))
-         (avatar  (address-avatar  p))
-         (runtime (address-runtime p))
-         (room    (address-room    p)))
-    (when (equal? runtime "@")
-      (error (string-append "enter: no runtime in address: " addr)))
-    (unless room
-      (error (string-append "enter: no room in address: " addr)))
-    (when avatar
-      (claim-alias runtime avatar))
-    (enter-room runtime room)))
+(define (resolve-description word pool)
+  (resolve-attr word pool "description"))
 
-(define (fib n)
-  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+(define (resolve-ref word pool)
+  ;; The broad resolver scans the three public identity attributes separately,
+  ;; flattens their DID lists, and removes duplicates caused by one ctx matching
+  ;; the same word in more than one attribute.
+  (unique-list
+    (flatten-list (list (resolve-name word pool)
+                         (resolve-nick word pool)
+                         (resolve-description word pool)))))

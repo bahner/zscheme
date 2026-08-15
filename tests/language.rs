@@ -200,12 +200,63 @@ fn unit_stdlib_provides_list_accessors() {
         (assert (equal? (cdadr '(0 (1 2) 3)) '(2)))
         (assert (= (cadddr '(0 1 2 3 4)) 3))
         (assert (equal? (cddddr '(0 1 2 3 4 5)) '(4 5)))
+        (assert (= (fib 10) 55))
         "list-accessors-ok"
         "#
     );
 
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "list-accessors-ok");
+}
+
+#[test]
+fn production_runtime_resolves_ctx_references() {
+    let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
+    let runtime = fs::read_to_string("lib/runtime.zscheme").unwrap();
+    let source = format!(
+        r#"
+        {stdlib}
+        {runtime}
+
+        (define pool
+          (list
+            (make-map "actor" "did:ma:lamp" "name" "Brass Lamp"
+                      "nick" "Light" "description" "A golden light")
+            (make-map "did" "did:ma:desk" "name" "Writing Desk"
+                      "nick" "Table" "description" "A wooden desk")
+            (make-map "actor" "did:ma:lamp" "name" "Spare Lamp")))
+
+        (assert (equal? (resolve-ref "brass" pool) '("did:ma:lamp")))
+        (assert (equal? (resolve-ref "LIGHT" pool) '("did:ma:lamp")))
+        (assert (equal? (resolve-ref "wooden" pool) '("did:ma:desk")))
+        (assert (equal? (resolve-ref "desk" pool) '("did:ma:desk")))
+        (assert (equal? (resolve-ref "lamp" pool) '("did:ma:lamp")))
+        (assert (equal? (resolve-ref "missing" pool) '()))
+        (assert (equal?
+          (resolve-ref "shared"
+            (list (make-map "actor" "did:ma:one" "name" "Shared one")
+                  (make-map "actor" "did:ma:two" "name" "Shared two")))
+          '("did:ma:one" "did:ma:two")))
+        "runtime-resolver-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "runtime-resolver-ok");
+}
+
+#[test]
+fn production_libraries_compose_in_order() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!("{source}\n(on-event \":print\" (list \"hello\"))\n\"loaded\"");
+
+    let (value, test_ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "loaded");
+    assert_eq!(test_ctx.output.borrow().as_str(), "hello");
 }
 
 #[test]

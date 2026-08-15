@@ -1,0 +1,560 @@
+; zscheme avatar library.
+; Vocabulary, name/DID resolution, and presentation.
+; Load stdlib and runtime before this file.
+; Routing (event-handlers, on-event) lives in events.zscheme, loaded after
+; this file. All commands below resolve names/nicks to DIDs or DID-URLs
+; before sending anything on the wire — never a bare name.
+;
+; This is policy and vocabulary, not runtime authority. Actors decide whether
+; an operation is legal; the avatar only assembles pools, resolves a human word,
+; and sends the ordinary actor verb.
+
+;; ── Focus and room snapshot ─────────────────────────────────────────────────
+
+(define (room) (#.my.ctx.room))
+
+; R7RS `apply` spreads its trailing list argument, so this is exactly
+; `(actor-call (room) method arg1 arg2 …)` for any number of caller args.
+(define (room-call method . args)
+  (apply actor-call (room) method args))
+
+; Cache of the last `look` snapshot — the only source the resolver below
+; searches without an extra round-trip.
+(define last-room #f)
+
+(define (remember-room! snapshot)
+  (when (map? snapshot)
+    (set! last-room snapshot))
+  snapshot)
+
+;; ── Name/DID resolver ──────────────────────────────────────────────────────
+; All command verbs below resolve a typed word to a DID/DID-URL through this
+; resolver before addressing anything directly. A bare `did:ma:` string always
+; passes through unresolved.
+
+(define (describe-candidate entry)
+  (let ((nick (map-ref entry "nick" #f)))
+    (string-append (map-ref entry "name" (entry-actor entry))
+                   (if (and (string? nick) (not (equal? nick "")))
+                       (string-append " \"" nick "\"")
+                       "")
+                   " (" (entry-actor entry) ")")))
+
+; Ambiguity is the user's problem to resolve, not ours to guess at: list every
+; candidate's DID so they can repeat the command unambiguously.
+(define (ambiguous-error word candidates)
+  (error
+    (fold (lambda (candidate text) (string-append text "\n  " (describe-candidate candidate)))
+          (string-append "\"" word "\" matches more than one — repeat the command with a DID instead:")
+          candidates)))
+
+(define (no-match-error word)
+  (error (string-append "no match for \"" word "\" here.")))
+
+; Every addressable thing in a room, regardless of which bucket it's filed
+; under — who (other avatars present), agents, and things are all fair game
+; for take/put/claim/owner/recycle.
+(define (occupant-pool room)
+  (append (event-list-values (map-ref room "who" ()))
+          (append (event-list-values (map-ref room "agents" ()))
+                  (event-list-values (map-ref room "things" ())))))
+
+(define (exit-pool room) (event-list-values (map-ref room "exits" ())))
+
+; Cheap first (search what we already have cached), fresh only if needed:
+; one `look` round-trip at most per resolve, never one per candidate.
+; Returns #f rather than erroring when nothing matches here, so a caller can
+; chain another pool (see resolve-ref below) before finally giving up.
+(define (resolve-against-or-false pool-getter word keys)
+  (if (starts-with-did? word)
+    word
+    (let* ((pool1 (if (map? last-room) (pool-getter last-room) ()))
+           (hit1 (resolve-in-pool word pool1 keys)))
+      (if hit1
+        hit1
+        (let* ((room2 (remember-room! (room-call "look")))
+               (pool2 (if (map? room2) (pool-getter room2) ())))
+          (resolve-in-pool word pool2 keys))))))
+
+(define (resolve-against pool-getter word keys)
+  (or (resolve-against-or-false pool-getter word keys)
+      (no-match-error word)))
+
+; The runtime-layer contract is defined in runtime.zscheme, not here. The
+; avatar layer decides which candidate pool to search (room snapshot, inventory,
+; etc.) and then delegates to the shared runtime resolver so all object actions
+; use the same DID-list contract.
+(define (resolve-room-pool)
+  (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+         (pool1 (if (map? room1) (occupant-pool room1) ())))
+    pool1))
+
+(define (resolve-inventory-pool)
+  (let ((inv (my-inv-if-any)))
+    (if inv (container-contents inv) ())))
+
+; The default candidate pool for a bare name: everything present in the room
+; plus everything already in your own inventory, assembled as one plain list
+; before any searching happens — resolve-ref (runtime.zscheme) only ever
+; searches a list it's handed, it never fetches one itself.
+(define (default-pool)
+  (append (resolve-room-pool) (resolve-inventory-pool)))
+
+; The single place that turns (word, pool) into one resolved entry or raises
+; no-match/ambiguous — never builds the pool itself; every caller assembles
+; its own candidate list first and hands it in here.
+(define (resolve-one-entry word pool)
+  (if (starts-with-did? word)
+    (candidate-for-did pool word)
+    (let ((hits (resolve-ref word pool)))
+      (cond ((null? hits) (no-match-error word))
+            ((null? (cdr hits)) (candidate-for-did pool (car hits)))
+            (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits)))))))
+
+(define (resolve-one word)
+  ;; Most verbs want exactly one actor, so this is their common command-boundary
+  ;; conversion from a human word to a wire-ready DID/DID-URL.
+  (entry-actor (resolve-one-entry word (default-pool))))
+
+; Resolve a word against an arbitrary caller-supplied pool (e.g. drop's
+; hand+inventory search space) rather than the default room+inventory pool.
+(define (resolve-in-given-pool word pool)
+  (entry-actor (resolve-one-entry word pool)))
+
+; Exits match on their direction word first ("north"), falling back to any
+; nick/name they might also carry.
+(define (resolve-exit word) (resolve-against exit-pool word (list "direction" "nick" "name")))
+
+; A container's own contents aren't in any room snapshot — the container has
+; to be asked directly, exactly like resolving anything else that isn't here.
+; ":contents?" replies with the raw list of content ctx's, not "look"'s text.
+(define (container-contents container)
+  (event-list-values (actor-call container "contents?")))
+
+(define (resolve-in-container word container)
+  (if (starts-with-did? word)
+    word
+    (let ((candidates (candidates-by-keys word (container-contents container) (list "nick" "name"))))
+      (cond ((null? candidates) (no-match-error word))
+            ((null? (cdr candidates)) (entry-actor (car candidates)))
+            (else (ambiguous-error word candidates))))))
+
+;; ── Entry and local context ─────────────────────────────────────────────────
+; `:enter`/`:traverse` replies carry the new room ctx; nothing else updates
+; `.my.ctx.room`/`.my.ctx.nick` for a Scheme-driven enter, so we must.
+
+; `(#.my.path: value)` is the local config *setter* (trailing colon on the
+; path atom); `(#.my.path:)` with no value is the *delete* form — used below
+; to clear a stale nick when the new room ctx doesn't give us one.
+(define (apply-entry-ctx! ctx)
+  (when (map? ctx)
+    (let ((parent (map-ref ctx "parent" #f)))
+      (when parent (#.my.ctx.room: parent)))
+    (let ((nick (map-ref ctx "nick" #f)))
+      (if (and (string? nick) (not (equal? nick "")))
+        (#.my.ctx.nick: nick)
+        (#.my.ctx.nick:))))
+  ctx)
+
+; A bare DID has no actor of its own to hold carried things under, so it
+; needs one concrete container to serve as that home — forged once as an
+; orphan of this runtime's root (ma-spec sec 6) and remembered locally from
+; then on. `.my.ctx.inv` is per-runtime, exactly like `.my.ctx.root` itself.
+(define (create-my-inv!)
+  (let ((created (actor-call (#.my.ctx.root) "forge" (make-map "kind" "/ma/container/0.0.1" "name" "inventory"))))
+    (#.my.ctx.inv: created)
+    created))
+
+(define (my-inv)
+  (guard (e (#t (create-my-inv!)))
+    (let ((existing (#.my.ctx.inv)))
+      (if (and (string? existing) (not (equal? existing "")))
+        existing
+        (create-my-inv!)))))
+
+; Read-only counterpart of `my-inv` — never forges — so a mere name lookup
+; (e.g. resolve-name's inventory fallback) can't have the side effect of
+; creating a fresh personal inventory just because nothing matched yet.
+(define (my-inv-if-any)
+  (guard (e (#t #f))
+    (let ((existing (#.my.ctx.inv)))
+      (if (and (string? existing) (not (equal? existing "")))
+        existing
+        #f))))
+
+      ;; ── World-building and movement verbs ──────────────────────────────────────
+      ;;
+      ;; Everything below is intentionally thin. Resolve locally, make one ordinary
+      ;; actor call, and let the authoritative actor return data or an error.
+
+; Movement is a two-hop relay (ma-spec sec 4), not one message: the exit
+; itself decides where "through" leads (and may refuse — a locked door just
+; echoes the *same* room back as `parent` along with blocking text), then a
+; *second*, separate `:enter` against the returned room is what actually
+; completes the move. There is no single "move me" verb anywhere in the spec.
+; The exit's `:traverse` takes a transient ctx map `{did, parent}` — the
+; traveller's own bare DID and its current room — never a bare DID string.
+(define (go direction)
+  (let* ((exit (resolve-exit direction))
+         (ctx (make-map "did" (#.my.identity.did) "parent" (room)))
+         (result (actor-call exit "traverse" ctx)))
+    (if (map? result)
+      (let ((parent (map-ref result "parent" #f)))
+        (if parent
+          (enter parent (#.my.ctx.nick))
+          (display (map-ref result "text" "You can't go that way."))))
+      (display result)))
+  nil)
+(define (dig . args)
+  (apply room-call "dig" args))
+
+(define (fill direction)
+  (room-call "fill" direction))
+
+(define (forge-usage-error)
+  (error "usage: forge <kind> named <name...> [in <target...>]"))
+
+; Direct child creation (ma-spec sec 7) — no avatar mediation on the runtime
+; side. The reply payload is either the new entity's DID-URL or a refusal
+; reason (e.g. an occupancy cap), so it's shown as-is, exactly like `owner`.
+; "named"/"in" are keywords, not data, so a multi-word name or target never
+; needs quoting: `forge lamp named Brass Lamp in Wardrobe`. Bare `forge kind
+; named name` defaults into your own inventory instead of a room/container.
+(define (forge kind . rest)
+  (if (or (null? rest) (not (equal? (car rest) "named")))
+      (forge-usage-error)
+      (let* ((after-named (cdr rest))
+             (name-words (words-before-keyword after-named "in"))
+             (target-words (words-after-keyword after-named "in")))
+        (if (or (null? name-words) (and target-words (null? target-words)))
+            (forge-usage-error)
+            (let ((name (join-words name-words))
+                  (target (if (pair? target-words) (join-words target-words) (my-inv))))
+              (display (actor-call (resolve-one target) "forge" (make-map "kind" kind "name" name)))
+              nil)))))
+
+(define (leave)
+  (room-call "leave"))
+
+(define (enter target nick)
+  (let ((result (apply-entry-ctx! (actor-call target "enter" nick))))
+    (if (map? result) (look) (display result)))
+  nil)
+
+;; ── One hand, one transfer at a time ────────────────────────────────────────
+;;
+;; `.my.ctx.hold*` is durable Zion-side sequencing state. `held-entry` below is
+;; only an in-memory label cache; actor DIDs and parent handshakes remain the
+;; authority. Zion's inbox poller advances pending and queued transitions.
+
+; Zion's own single-slot analogue of ownership: holding something sets its
+; parent directly to your own DID (ma-spec sec 4/6 place no restriction on a
+; parent being a bare avatar). `hold`/`take`/`take-from` all start the same
+; two-hop handshake: ask the item to propose itself to you (:hold, which
+; targets msg-from implicitly — unlike :set-parent it takes no DID-URL
+; argument), then wait for its own resulting `:parent` proposal to actually
+; arrive addressed to you. Confirming that proposal (replying `:child`) —
+; and later clearing the slot on the item's departure notice — is not
+; something this evaluator can do on its own: the proposal is a separate,
+; later, unsolicited message, not a return value of this call. That
+; confirm/clear wiring lives in ma-zion's inbox_poll.rs
+; (handle_hold_parent_proposal). The visible outcome (or a refusal such as
+; "nailed to the floor") still arrives on the room's print/event channel,
+; not the RPC ack (ma-spec sec 8).
+(define (my-hold)
+  (guard (e (#t "")) (#.my.ctx.hold)))
+
+(define (my-hold-pending)
+  (guard (e (#t "")) (#.my.ctx.hold-pending)))
+
+(define (my-hold-queued)
+  (guard (e (#t "")) (#.my.ctx.hold-queued)))
+
+(define (clear-queued-hold!)
+  (#.my.ctx.hold-queued:)
+  (#.my.ctx.hold-queued-then:))
+
+(define (queue-hold-after-stow! held target then)
+  (#.my.ctx.hold-queued: target)
+  (if then (#.my.ctx.hold-queued-then: then) (#.my.ctx.hold-queued-then:))
+  ; The avatar is the held item's current parent, so it may stow that item
+  ; in its ordinary inventory. Zion waits for the authoritative departure
+  ; notice before it starts the queued :hold request.
+  (guard (e (#t (begin
+                  (clear-queued-hold!)
+                  (error e))))
+    (actor-call held "set-parent" (my-inv)))
+  nil)
+
+(define (hold-target! target then)
+  (let ((held (my-hold)))
+    (cond ((not (equal? (my-hold-pending) ""))
+         (error (string-append "already reaching for " (my-hold-pending) ".")))
+        ((not (equal? (my-hold-queued) ""))
+         (error (string-append "already stowing for " (my-hold-queued) ".")))
+        ((not (equal? held ""))
+         (queue-hold-after-stow! held target then))
+        (else
+         (begin
+           (#.my.ctx.hold-pending: target)
+           (if then (#.my.ctx.hold-then: then) (#.my.ctx.hold-then:))
+           ; If the item refuses the :hold request outright (no ownership/
+           ; ctx authority, or a same-room mismatch), that refusal is this
+           ; call's own RPC reply, not a later message — clear the slot back
+           ; out and re-raise, or hold-pending would stay stuck forever.
+           (guard (e (#t (begin
+                           (#.my.ctx.hold-pending:)
+                           (#.my.ctx.hold-then:)
+                           (error e))))
+             (actor-call target "hold"))
+           nil)))))
+
+; The entry remembered at hold/take time, so drop can later resolve a name
+; against the hand even before an item has landed in the room/inventory
+; snapshot again. Cleared once the hand empties.
+(define held-entry #f)
+
+(define (remember-held! entry)
+  (set! held-entry (if (map? entry) entry #f))
+  entry)
+
+(define (hold name)
+  (let ((entry (resolve-one-entry name (default-pool))))
+    (hold-target! (entry-actor entry) #f)
+    (remember-held! entry)
+    nil))
+
+; take = hold, then relay straight into your own inventory once the hold is
+; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs). Unlike
+; hold, it only resolves items present in the room, never your inventory.
+(define (take name)
+  (let ((entry (resolve-one-entry name (resolve-room-pool))))
+    (hold-target! (entry-actor entry) (my-inv))
+    (remember-held! entry)
+    nil))
+
+(define (take-from container name)
+  (hold-target! (resolve-in-container name (resolve-one container)) (my-inv)))
+
+; A synthetic single-entry pool for whatever is currently in the hand — the
+; cached hold/take entry when it's still fresh (same DID as .my.ctx.hold),
+; falling back to a one-off "about" round-trip otherwise so the entry still
+; carries a real name to match against — a fresh login has `.my.ctx.hold`
+; persisted from before but no cached held-entry (that cache is in-memory
+; only), and a bare DID-only entry can never match a typed name at all.
+(define (held-pool)
+  (let ((held (my-hold)))
+    (cond ((equal? held "") ())
+          ((and held-entry (equal? (entry-actor held-entry) held)) (list held-entry))
+          (else (list (make-map "did" held "actor" held "name" (held-label held)))))))
+
+; drop's search space: the hand plus your own inventory — an item doesn't
+; stop being yours to put down just because it hasn't landed in the bag yet.
+(define (drop-pool)
+  (append (held-pool) (resolve-inventory-pool)))
+
+; drop relocates the named item (or, with no name, whatever is in hand),
+; resolved against both the hand and your inventory. Ownership plays no part
+; (node.ma: parenting, not ownership, is what authorises :set-parent) — you
+; may drop something you're merely carrying, stolen or otherwise. The room is
+; asked to pre-check capacity (:drop) before the item's own unchanged
+; :set-parent; a refusal there raises before set-parent is ever sent.
+(define (drop . rest)
+  (let* ((held (my-hold))
+         (target (if (null? rest)
+                   (if (equal? held "") (error "you aren't holding anything.") held)
+                   (resolve-in-given-pool (join-words rest) (drop-pool)))))
+    (actor-call (room) "drop")
+    (actor-call target "set-parent" (room))
+    (when (equal? target held) (set! held-entry #f))
+    nil))
+
+  ;; ── Direct object verbs ─────────────────────────────────────────────────────
+
+(define (put-usage-error)
+  (error "usage: put <item...> in <container...>"))
+
+; Like forge/tell, `in` is a hard separator so both references may use their
+; human-readable multi-word names. Relocation is performed directly on the
+; resolved item; the item need not first be placed in the hand.
+(define (put . words)
+  (let ((item-words (words-before-keyword words "in"))
+        (container-words (words-after-keyword words "in")))
+    (if (or (null? item-words) (not container-words) (null? container-words))
+      (put-usage-error)
+      (let ((item (resolve-one (join-words item-words)))
+            (container (resolve-one (join-words container-words))))
+        (actor-call item "set-parent" container)
+        nil))))
+
+(define (put-in . words)
+  (apply put words))
+
+(define (recycle-from container name)
+  (actor-call (resolve-in-container name (resolve-one container)) "recycle")
+  nil)
+
+(define (say . words)
+  (room-call "say" (join-words words))
+  nil)
+
+(define (emote . words)
+  (room-call "emote" (join-words words))
+  nil)
+
+(define (claim name)
+  (actor-call (resolve-one name) "claim")
+  nil)
+
+(define (owner name)
+  (display (actor-call (resolve-one name) "owner?"))
+  nil)
+
+(define (recycle name)
+  (actor-call (resolve-one name) "recycle")
+  nil)
+
+; Room ownership decides whether this repair is authorised. The target stays
+; unresolved here so the room can match every current child, including a
+; direct bare DID that is no longer in the avatar's presentation snapshot.
+(define (remove . words)
+  (if (null? words)
+    (error "usage: remove <child...>")
+    (begin
+      (display (room-call "remove" (join-words words)))
+      nil)))
+
+(define (tell-usage-error)
+  (error "usage: tell <target...> to <verb> [args...]"))
+
+; Generic in-world request forwarding: "to" is a hard separator, not just
+; style, so a multi-word target description can precede it (e.g. "tell golden
+; duckie with peacock feathers to quack"). The resolved target's own
+; set-cmd-method!/reply-error decides whether to comply or refuse — tell only
+; resolves and relays, exactly like owner/claim do for their one dedicated verb.
+(define (tell . words)
+  (let ((target-words (words-before-keyword words "to"))
+        (after-to (words-after-keyword words "to")))
+    (if (or (null? target-words) (not after-to) (null? after-to))
+      (tell-usage-error)
+      (let* ((target (resolve-one (join-words target-words)))
+             (verb (car after-to))
+             (args (cdr after-to))
+             (reply (apply actor-call target verb args)))
+        ; A bare :ok ack (Nil) carries no information — the target's own
+        ; :print broadcast, if any, is the real narrative; only a non-nil
+        ; reply is worth showing here.
+        (unless (null? reply) (display reply))
+        nil))))
+
+      ;; ── Queries and inventory views ─────────────────────────────────────────────
+      ;;
+      ;; Query RPCs return structured data. The event library owns rendering so the
+      ;; same formatters serve solicited replies and unsolicited room events.
+
+(define (here?)
+  (display (room))
+  nil)
+
+(define (who?)
+  (event-who (room-call "who?"))
+  nil)
+
+(define (occupants?)
+  (event-occupants (room-call "occupants?"))
+  nil)
+
+(define (things?)
+  (event-things (room-call "things?"))
+  nil)
+
+(define (exits?)
+  (event-exits (room-call "exits?"))
+  nil)
+
+; An inventory is nothing but an ordinary container you point yourself at —
+; any container works, not just an auto-forged one, so pointing elsewhere is
+; just a setter, not a special operation. `:kind?` guards against pointing it
+; at a room, thing, or agent by mistake.
+(define (set-my-inv! container)
+  (let ((kind (actor-call container "kind?")))
+    (if (equal? kind "/ma/container/0.0.1")
+      (begin
+        (#.my.ctx.inv: container)
+        (display (string-append "inventory set to " container)))
+      (error (string-append "invalid inventory kind: " kind))))
+  nil)
+
+; Best label for whatever `my-hold` names: prefer a cached ctx entry's
+; nick/name (room or inventory pool — no round-trip needed), and only fall
+; back to an RPC round-trip for an item held in the hands, parented directly
+; to us, that isn't in either pool yet.
+(define (held-label held)
+  (let ((entry (find-entry-by-actor (append (resolve-room-pool) (resolve-inventory-pool)) held)))
+    (if entry
+      (event-name entry)
+      (guard (e (#t held)) (first-line (actor-call held "about"))))))
+
+(define (inv . rest)
+  (if (pair? rest)
+    (set-my-inv! (car rest))
+    (let ((held (my-hold))
+          (snapshot (actor-call (my-inv) "look")))
+      (when (not (equal? held ""))
+        (display (string-append "You are holding " (held-label held) ".")))
+      (if (map? snapshot)
+        (event-things (map-ref snapshot "things" ()))
+        (display snapshot))
+      nil)))
+
+; `help` with no argument shows the avatar's own command list; `help <name>`
+; resolves the name (same room/inventory resolver every other verb uses) and
+; asks that actor's own `:help` verb for its usage, exactly like `look <name>`.
+(define (help . rest)
+  (if (pair? rest)
+    (display (actor-call (resolve-one (car rest)) "help"))
+    (display
+      (string-append
+        "go <direction>          move through a named exit\n"
+        "help                    show this command list\n"
+        "help <name>             show usage for something here or in your inventory\n"
+        "look                    show the current room\n"
+        "look <name>             examine something here or in your inventory\n"
+        "who?                    list who is here\n"
+        "occupants?              list occupants here\n"
+        "things?                 list things here\n"
+        "exits?                  list exits here\n"
+        "here?                   show the current room's address\n"
+        "hold <name>             hold something (room or your own inventory), empty-handed\n"
+        "take <name>             hold something from the room into your inventory\n"
+        "take-from <container> <name>  hold something out of a container into your inventory\n"
+        "drop                    drop whatever you're holding into the room\n"
+        "put <item...> in <container...>  put something into a container\n"
+        "recycle-from <container> <name>  destroy something inside a container that you own\n"
+        "inv                     show what you're holding and your own inventory\n"
+        "inv <container>         point your inventory at any container\n"
+        "say <text>              say something aloud\n"
+        "emote <text>            perform an emote\n"
+        "claim <name>            claim ownership of something\n"
+        "owner <name>            show who owns something\n"
+        "recycle <name>          destroy something you own\n"
+        "remove <child...>       owner repairs a stale room child\n"
+        "dig <direction>         create a new exit\n"
+        "fill <direction>        remove an exit\n"
+        "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"
+        "enter <target> <nick>   enter a room directly by address\n"
+        "leave                   leave the current room")))
+  nil)
+
+;; `look` stays with the command vocabulary even though `event-look` renders
+;; the result. A no-argument look also refreshes the resolver snapshot cache.
+(define (look . rest)
+  (if (pair? rest)
+    (display (actor-call (resolve-one (car rest)) "look"))
+    (let ((snapshot (remember-room! (room-call "look"))))
+      (if (map? snapshot)
+        (event-look snapshot)
+        (display snapshot))))
+  nil)
+
+;; End of avatar library.

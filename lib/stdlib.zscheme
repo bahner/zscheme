@@ -5,11 +5,15 @@
 ;; (string-index, substring, string-length, string-append, cons,
 ;;  car, cdr, null?, pair?, =, <, >, mod, not, display, error).
 ;;
-;; Load with: (include ".my.scheme.stdlib.ma")
-;; Or from terminal: .my.scheme.stdlib.ma!eval
+;; Load with: (include ".my.doc.stdlib")
+;; Or from terminal: .my.doc.stdlib!eval
 ;;
-;; Publish to IPFS: .my.scheme.stdlib.ma!publish @ma
-;; Then share the CID so others can: .my.scheme.stdlib.ma!fetch /ipfs/<cid>
+;; Publish to IPFS: .my.doc.stdlib!publish @ma
+;; Then share the CID so others can: .my.doc.stdlib!fetch /ipfs/<cid>
+;;
+;; Nothing in this file knows about DIDs, actors, Zion state, or the network.
+;; That is the boundary: if a helper is useful for ordinary Scheme data, it
+;; belongs here; if it knows what an MA ctx means, it belongs in runtime.
 
 ;; ── List aliases ──────────────────────────────────────────────────────────────
 
@@ -56,6 +60,9 @@
 (define remainder mod)
 
 ;; ── List operations ───────────────────────────────────────────────────────────
+;;
+;; These procedures expect proper lists. We deliberately keep the familiar
+;; recursive definitions visible instead of hiding them behind host builtins.
 
 (define (length lst)
   (let loop ((l lst) (n 0))
@@ -75,6 +82,14 @@
   (let loop ((l lst) (acc '()))
     (if (null? l) acc (loop (cdr l) (cons (car l) acc)))))
 
+;; Flatten nested proper lists while leaving every non-list value untouched.
+;; Runtime uses this to combine independent resolver result lists.
+(define (flatten-list vals)
+  (cond ((null? vals) '())
+        ((list? (car vals))
+         (append (flatten-list (car vals)) (flatten-list (cdr vals))))
+        (else (cons (car vals) (flatten-list (cdr vals))))))
+
 (define (map f lst)
   (if (null? lst)
       '()
@@ -90,6 +105,8 @@
     (f (car lst))
     (for-each f (cdr lst))))
 
+  ;; Left fold. `f` receives the current item first and the accumulator second;
+  ;; this is the calling convention used throughout the zscheme libraries.
 (define (fold f init lst)
   (if (null? lst)
       init
@@ -118,12 +135,25 @@
 (define (even? n)     (= (mod n 2) 0))
 (define (odd? n)      (not (even? n)))
 
+;; The direct definition is intentionally here. Besides being lovely Scheme,
+;; Fibonacci numbers are useful as a small backoff schedule, and successive
+;; non-zero terms approach the golden ratio. Callers needing large terms can
+;; add a linear implementation without obscuring this readable one.
+(define (fib n)
+  (if (< n 2)
+      n
+      (+ (fib (- n 1)) (fib (- n 2)))))
+
 ;; ── String utilities ──────────────────────────────────────────────────────────
+;;
+;; `string-index` returns #f when there is no match. The helpers below preserve
+;; that host convention and turn it into ordinary strings and lists.
 
 (define (string-contains hay needle)
   (not (equal? (string-index hay needle) #f)))
 
 (define (string-split s delim)
+  ;; `delim` must be non-empty; an empty delimiter cannot consume input.
   (let ((dlen (string-length delim)))
     (let loop ((rest s) (acc '()))
       (let ((idx (string-index rest delim)))
@@ -143,6 +173,28 @@
 
 (define (string-lines s)   (string-split s "\n"))
 (define (string-unlines l) (string-join l "\n"))
+
+(define (join-words words)
+  (string-join words " "))
+
+;; Return the human-facing title line from a multi-line actor reply.
+(define (first-line text)
+  (let ((index (string-index text "\n")))
+    (if index (substring text 0 index) text)))
+
+(define (words-before-keyword words keyword)
+  (cond ((null? words) '())
+        ((equal? (car words) keyword) '())
+        (else
+         (cons (car words) (words-before-keyword (cdr words) keyword)))))
+
+;; Unlike `words-before-keyword`, #f means the separator was absent. An empty
+;; list means it was present but had no words after it. Command parsers need to
+;; distinguish those two cases for useful usage errors.
+(define (words-after-keyword words keyword)
+  (cond ((null? words) #f)
+        ((equal? (car words) keyword) (cdr words))
+        (else (words-after-keyword (cdr words) keyword))))
 
 (define (string-trim s)
   (let* ((len (string-length s))
@@ -174,7 +226,18 @@
 (define (contains? lst item)
   (not (equal? (member item lst) #f)))
 
-;; View helpers — replaces Rust :cat :head :tail :wc
+;; Stable de-duplication that keeps the last occurrence of each value. Resolver
+;; callers care about a deterministic answer set, not attribute repetition.
+(define (unique-list lst)
+  (cond ((null? lst) ())
+        ((contains? (cdr lst) (car lst)) (unique-list (cdr lst)))
+        (else (cons (car lst) (unique-list (cdr lst))))))
+
+;; ── Text views ────────────────────────────────────────────────────────────────
+;;
+;; Small Scheme equivalents of the old host-side :cat/:head/:tail/:wc helpers.
+;; `doc-cat` is the one deliberate host-facing edge in stdlib: it evaluates a
+;; local document path supplied by the caller; it never fetches remote content.
 (define (doc-cat path)
   (eval (string-append "(" path ".content)")))
 

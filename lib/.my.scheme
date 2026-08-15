@@ -1,4 +1,0 @@
-;; stdlib import
-(include #/ipfs/bafkreicrhhoyj2phs6mce2h6xtfdvlarrfvn3524dlpoxi2i2ma4efwiey)
-;; runtime lib import
-(include #/ipfs/bafkreibxxtzjflkwqcuutxipbckpx4fjwnc7w2arvstsegvbjm3cagolvi)

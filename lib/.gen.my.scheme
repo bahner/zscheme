@@ -1,5 +1,0 @@
-#!/usr/bin/env sh
-set -eu
-
-printf '%s\n' "(include #/ipfs/$(cat stdlib.cid))"
-printf '%s\n' "(include #/ipfs/$(cat runtime.cid))"

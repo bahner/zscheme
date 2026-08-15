@@ -4,6 +4,8 @@
 
 - Never modify files outside this workspace without explicit user approval.
 - Use British English for project-owned names and prose.
+- Write DRY, KISS code: avoid duplicated logic and prefer the simplest
+  implementation that meets the requirement.
 - Keep `ma-core` `^0.14.4` or newer and `ma-zscheme` as published dependencies; do not commit local path dependencies.
 
 ## DID document publication
@@ -14,6 +16,44 @@
 	extension data is covered by the proof.
 - Call `Document::validate()` and `Document::verify()` immediately before every
 	direct `IpfsDidPublisher::publish_document` call.
+
+## Stdlib vs runtime ownership
+
+The Scheme stdlib is deliberately generic. It contains purely evaluative helpers
+common to all host applications, such as list utilities, string predicates, and
+plain data transforms. MA actor, DID, ctx, and object-reference helpers belong
+in `lib/runtime.zscheme`, not in stdlib. In particular, `resolve-ref` belongs to
+the runtime lookup vocabulary.
+
+`unique-list` is the generic shared list-set primitive that turns a candidate
+list into a stable, de-duplicated answer. The runtime-specific `resolve-ref`
+then adopts that shape as part of its answer contract: a flat list of DID
+strings, with repeated DIDs collapsed before it crosses the avatar boundary.
+
+## Events and avatar layer
+
+Events do not belong to the runtime as an authoritative semantic surface. They
+are a client-side, Zion-facing convenience stream: a human terminal can consume
+room broadcasts / `:print`-style traffic as a narrative overlay, while the
+runtime answers ordinary RPC/data questions through `ma-reply!` and structured
+ctx maps. In other words, the event channel is consumer-visible machinery for
+Zion, not a second world protocol to be reified in the runtime library.
+
+The avatar layer is a client-side facade over the data forms. It resolves a
+human word against the room snapshot and inventory, chooses a single `did:`
+target when that is appropriate, and then calls the runtime actor methods such
+as `:set-parent` / `:claim` / `:owner?` that implement the object movement and
+ownership lifecycle. The avatar therefore owns the human-facing interpretation
+and the one-argument convenience wrappers, not the authoritative runtime
+semantics themselves.
+
+`lib/stdlib.zscheme`, `lib/runtime.zscheme`, `lib/avatar.zscheme`, and
+`lib/events.zscheme` are the four authoritative development layers.
+`lib/.my.z.scheme` is their ignored, generated physical concatenation in that
+order; `lib/.my.z.scheme.cid` is the versionable publication result. Use
+`make zscheme-cid` to publish only that combined startup source. Keep the
+composition ordinary Scheme; do not add a namespace, module, or dynamic loading
+framework around it.
 
 ## Scheme host contract
 

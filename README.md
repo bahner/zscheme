@@ -30,9 +30,9 @@ before normal dispatch. Results are spliced back as strings into the command.
 - **Session environment** — definitions persist across the login session
 - **`|` pipe threading** — compose RPC results and Scheme functions in a pipeline
 - **Scriptable docs** — store scripts in any `.my` path, share via IPFS CID
-- **`.my.scheme!save`** — serialise your session env to a persistent image
+- **`.my.z.scheme!save`** — serialise your session env to a persistent image
 - **Stdlib** — common functions in pure zscheme, loadable from IPFS
-- **`include`** — load a script by path: `(include ".my.scheme")`
+- **`include`** — load a script by path: `(include ".my.z.scheme")`
 
 ---
 
@@ -161,49 +161,53 @@ Inside `(…)` expressions, `|` threads a value through a chain of functions:
 Save your definitions between sessions:
 
 ```
-.my.scheme!save   ; serialise session env to .my.scheme.content
-.my.scheme!edit   ; review and clean up
-.my.scheme!eval   ; reload after editing
+.my.z.scheme!save   ; serialise session env to .my.z.scheme.content
+.my.z.scheme!edit   ; review and clean up
+.my.z.scheme!eval   ; reload after editing
 ```
 
 Auto-load at login:
 
 ```zscheme
-.my.scheme.autoload: true
+.my.z.scheme.autoload: true
 ```
 
 ---
 
-## Loading libraries
+## Standard library image
 
-The stdlib ([`lib/stdlib.zscheme`](lib/stdlib.zscheme)) provides list helpers such as `map`, `filter`,
-`fold`, `take`, `drop`, `member`, and `contains?`; string helpers such as
-`string-split` and `string-join`; and associative map helpers such as
-`make-map`, `map-ref`, `map-set`, `map-delete`, `map-keys`, `map-values`,
-`map->alist`, and `alist->map`.
+For most users, zscheme is one source file. Zion evaluates `.my.z.scheme` at
+startup. The published default is the physical concatenation of four ordinary
+Scheme libraries, in this order:
 
-Publish all libraries and generate the combined loader with:
+1. `lib/stdlib.zscheme` — generic Scheme helpers
+2. `lib/runtime.zscheme` — MA actor, DID, ctx, and resolver helpers
+3. `lib/avatar.zscheme` — human-facing actor commands
+4. `lib/events.zscheme` — event presentation and dispatch
+
+The separate files are useful when developing extensions. They are not a
+loading requirement for ordinary users.
+
+Publish only the combined source with:
+
+```sh
+make zscheme-cid
+cat lib/.my.z.scheme.cid
+```
+
+`lib/.my.z.scheme` is an ignored build artefact. The four library files are
+the authoritative sources; the generated `.cid` file is the immutable
+publication result. To publish both the individual libraries and the combined
+source, use:
 
 ```sh
 make publish
-cat lib/my.scheme.cid
 ```
 
-Set `.my.scheme` in Zion to the resulting CID:
+Set `.my.z.scheme` in Zion to the resulting immutable source CID:
 
-```scheme
-.my.scheme: (include #/ipfs/<my-scheme-cid>)
-```
-
-The published `lib/my.scheme` includes both the stdlib and runtime helpers.
-
-```
-; In zion:
-.my.doc.stdlib.ma!fetch /ipfs/<cid>   ; fetch from IPFS by CID
-.my.doc.stdlib.ma!eval                ; evaluate into session environment
-
-; From inside a Scheme expression:
-(include ".my.doc.stdlib.ma")
+```text
+.my.z.scheme: /ipfs/<my-scheme-cid>
 ```
 
 ---
