@@ -47,6 +47,14 @@ ownership lifecycle. The avatar therefore owns the human-facing interpretation
 and the one-argument convenience wrappers, not the authoritative runtime
 semantics themselves.
 
+All object arguments use one room-child resolver over `who`, `agents`,
+`things`, and `exits`, followed by inventory contents. Exactly one match is
+accepted; no match is an error, and multiple matches list their DID/DID-URLs so
+the user can rephrase or supply an exact address. A bare DID has no identity
+actor, so `look` renders the resolved child ctx rather than requiring an RPC.
+Ordinary object RPC verbs dispatch through `(command object method . params)`;
+do not duplicate `resolve-one` plus `actor-call` in each command wrapper.
+
 `lib/stdlib.zscheme`, `lib/runtime.zscheme`, `lib/avatar.zscheme`, and
 `lib/events.zscheme` are the four authoritative development layers.
 `lib/.my.z.scheme` is their ignored, generated physical concatenation in that

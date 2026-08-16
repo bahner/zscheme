@@ -51,13 +51,13 @@
 (define (no-match-error word)
   (error (string-append "no match for \"" word "\" here.")))
 
-; Every addressable thing in a room, regardless of which bucket it's filed
-; under — who (other avatars present), agents, and things are all fair game
-; for take/put/claim/owner/recycle.
-(define (occupant-pool room)
+; One candidate pool for every child visible in a room snapshot. Command
+; boundaries resolve exactly one entry from this pool or report ambiguity.
+(define (room-child-pool room)
   (append (event-list-values (map-ref room "who" ()))
-          (append (event-list-values (map-ref room "agents" ()))
-                  (event-list-values (map-ref room "things" ())))))
+    (append (event-list-values (map-ref room "agents" ()))
+      (append (event-list-values (map-ref room "things" ()))
+        (event-list-values (map-ref room "exits" ()))))))
 
 (define (exit-pool room) (event-list-values (map-ref room "exits" ())))
 
@@ -88,17 +88,17 @@
 ; use the same DID-list contract.
 (define (resolve-room-pool)
   (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
-         (pool1 (if (map? room1) (occupant-pool room1) ())))
+         (pool1 (if (map? room1) (room-child-pool room1) ())))
     pool1))
 
 (define (resolve-inventory-pool)
   (let ((inv (my-inv-if-any)))
     (if inv (container-contents inv) ())))
 
-; The default candidate pool for a bare name: everything present in the room
-; plus everything already in your own inventory, assembled as one plain list
-; before any searching happens — resolve-ref (runtime.zscheme) only ever
-; searches a list it's handed, it never fetches one itself.
+; The default candidate pool for a bare name: every child in the room plus
+; everything already in your own inventory, assembled as one plain list before
+; any searching happens — resolve-ref (runtime.zscheme) only ever searches a
+; list it's handed, it never fetches one itself.
 (define (default-pool)
   (append (resolve-room-pool) (resolve-inventory-pool)))
 
@@ -117,6 +117,12 @@
   ;; Most verbs want exactly one actor, so this is their common command-boundary
   ;; conversion from a human word to a wire-ready DID/DID-URL.
   (entry-actor (resolve-one-entry word (default-pool))))
+
+; The ordinary object-command boundary. Every caller supplies a human object
+; reference first; resolution, no-match, and ambiguity are handled here before
+; the method and its remaining parameters are sent to the chosen actor.
+(define (command object method . params)
+  (apply actor-call (resolve-one object) method params))
 
 ; Resolve a word against an arbitrary caller-supplied pool (e.g. drop's
 ; hand+inventory search space) rather than the default room+inventory pool.
@@ -232,7 +238,7 @@
             (forge-usage-error)
             (let ((name (join-words name-words))
                   (target (if (pair? target-words) (join-words target-words) (my-inv))))
-              (display (actor-call (resolve-one target) "forge" (make-map "kind" kind "name" name)))
+              (display (command target "forge" (make-map "kind" kind "name" name)))
               nil)))))
 
 (define (leave)
@@ -386,16 +392,16 @@
         (container-words (words-after-keyword words "in")))
     (if (or (null? item-words) (not container-words) (null? container-words))
       (put-usage-error)
-      (let ((item (resolve-one (join-words item-words)))
-            (container (resolve-one (join-words container-words))))
-        (actor-call item "set-parent" container)
+      (let ((item (join-words item-words))
+        (container (resolve-one (join-words container-words))))
+        (command item "set-parent" container)
         nil))))
 
 (define (put-in . words)
   (apply put words))
 
 (define (recycle-from container name)
-  (actor-call (resolve-in-container name (resolve-one container)) "recycle")
+  (command (resolve-in-container name (resolve-one container)) "recycle")
   nil)
 
 (define (say . words)
@@ -407,15 +413,15 @@
   nil)
 
 (define (claim name)
-  (actor-call (resolve-one name) "claim")
+  (command name "claim")
   nil)
 
 (define (owner name)
-  (display (actor-call (resolve-one name) "owner?"))
+  (display (command name "owner?"))
   nil)
 
 (define (recycle name)
-  (actor-call (resolve-one name) "recycle")
+  (command name "recycle")
   nil)
 
 ; Room ownership decides whether this repair is authorised. The target stays
@@ -441,10 +447,9 @@
         (after-to (words-after-keyword words "to")))
     (if (or (null? target-words) (not after-to) (null? after-to))
       (tell-usage-error)
-      (let* ((target (resolve-one (join-words target-words)))
-             (verb (car after-to))
+            (let* ((verb (car after-to))
              (args (cdr after-to))
-             (reply (apply actor-call target verb args)))
+              (reply (apply command (join-words target-words) verb args)))
         ; A bare :ok ack (Nil) carries no information — the target's own
         ; :print broadcast, if any, is the real narrative; only a non-nil
         ; reply is worth showing here.
@@ -516,7 +521,7 @@
 ; asks that actor's own `:help` verb for its usage, exactly like `look <name>`.
 (define (help . rest)
   (if (pair? rest)
-    (display (actor-call (resolve-one (car rest)) "help"))
+    (display (command (join-words rest) "help"))
     (display
       (string-append
         "go <direction>          move through a named exit\n"
@@ -552,9 +557,18 @@
 
 ;; `look` stays with the command vocabulary even though `event-look` renders
 ;; the result. A no-argument look also refreshes the resolver snapshot cache.
+(define (look-entry entry)
+  (let ((description (map-ref entry "description" "")))
+    (display
+      (string-append
+        (event-name entry)
+        (if (and (string? description) (not (equal? description "")))
+          (string-append "\n" description)
+          "")))))
+
 (define (look . rest)
   (if (pair? rest)
-    (display (actor-call (resolve-one (car rest)) "look"))
+    (look-entry (resolve-one-entry (join-words rest) (default-pool)))
     (let ((snapshot (remember-room! (room-call "look"))))
       (if (map? snapshot)
         (event-look snapshot)

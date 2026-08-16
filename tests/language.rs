@@ -389,6 +389,64 @@ fn production_avatar_commands_accept_representative_arguments() {
 }
 
 #[test]
+fn production_avatar_resolves_all_room_children_or_reports_ambiguity() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (define direct-attila
+                    (make-map "actor" "did:ma:attila" "did" "did:ma:attila"
+                                        "name" "Attila" "nick" "Attila"
+                                        "description" "A direct DID presence."))
+                (define agent-attila
+                    (make-map "actor" "did:ma:world#attila" "name" "Attila"
+                                        "nick" "Attila" "kind" "agent"
+                                        "description" "An agent."))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "name" "Lamp"
+                                        "description" "A lamp."))
+                (define mirror
+                    (make-map "actor" "did:ma:world#mirror" "name" "Mirror"
+                                        "direction" "mirror" "description" "An exit."))
+                (set! last-room
+                    (make-map "who" (make-map "did:ma:attila" direct-attila)
+                                        "agents" (list agent-attila)
+                                        "things" (list lamp) "exits" (list mirror)))
+
+                (define (actor-call actor method . params) actor)
+
+                (assert (equal? (command "Lamp" "probe") "did:ma:world#lamp"))
+                (assert (equal? (command "Mirror" "probe") "did:ma:world#mirror"))
+
+                (guard (failure
+                        ((and (string-contains failure "matches more than one")
+                              (string-contains failure "did:ma:attila")
+                              (string-contains failure "did:ma:world#attila")) #t)
+                        (#t (error failure)))
+                    (command "Attila" "probe"))
+
+                (set! last-room
+                    (make-map "who" (make-map "did:ma:attila" direct-attila)
+                                        "agents" () "things" (list lamp) "exits" (list mirror)))
+                (look "Attila")
+                "room-child-resolver-ok"
+                "#
+    );
+
+    let (value, test_ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "room-child-resolver-ok");
+    assert_eq!(
+        test_ctx.output.borrow().as_str(),
+        "Attila\nA direct DID presence."
+    );
+}
+
+#[test]
 fn production_libraries_compose_in_order() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
