@@ -66,19 +66,21 @@
 ; Returns #f rather than erroring when nothing matches here, so a caller can
 ; chain another pool (see resolve-ref below) before finally giving up.
 (define (resolve-against-or-false pool-getter word keys)
-  (if (starts-with-did? word)
-    word
-    (let* ((pool1 (if (map? last-room) (pool-getter last-room) ()))
-           (hit1 (resolve-in-pool word pool1 keys)))
-      (if hit1
-        hit1
-        (let* ((room2 (remember-room! (room-call "look")))
-               (pool2 (if (map? room2) (pool-getter room2) ())))
-          (resolve-in-pool word pool2 keys))))))
+  (let* ((pool1 (if (map? last-room) (pool-getter last-room) ()))
+         (hit1 (candidates-by-keys word pool1 keys)))
+    (if (not (null? hit1))
+      hit1
+      (let* ((room2 (remember-room! (room-call "look")))
+             (pool2 (if (map? room2) (pool-getter room2) ())))
+        (candidates-by-keys word pool2 keys)))))
 
 (define (resolve-against pool-getter word keys)
-  (or (resolve-against-or-false pool-getter word keys)
-      (no-match-error word)))
+  (if (starts-with-did? word)
+    word
+    (let ((candidates (resolve-against-or-false pool-getter word keys)))
+      (cond ((null? candidates) (no-match-error word))
+            ((null? (cdr candidates)) (entry-actor (car candidates)))
+            (else (ambiguous-error word candidates))))))
 
 ; The runtime-layer contract is defined in runtime.zscheme, not here. The
 ; avatar layer decides which candidate pool to search (room snapshot, inventory,
@@ -353,20 +355,22 @@
 (define (drop-pool)
   (append (held-pool) (resolve-inventory-pool)))
 
-; drop relocates the named item (or, with no name, whatever is in hand),
-; resolved against both the hand and your inventory. Ownership plays no part
-; (node.ma: parenting, not ownership, is what authorises :set-parent) — you
-; may drop something you're merely carrying, stolen or otherwise. The room is
-; asked to pre-check capacity (:drop) before the item's own unchanged
-; :set-parent; a refusal there raises before set-parent is ever sent.
+; drop resolves the named item (or, with no name, whatever is in hand) against
+; both the hand and your inventory. The room pre-checks capacity first. An item
+; already in hand can then receive :set-parent directly; an inventory child
+; must first use the ordinary :hold handshake, with the room stored as its
+; hold-then target, because only its current parent may request :set-parent.
 (define (drop . rest)
   (let* ((held (my-hold))
          (target (if (null? rest)
                    (if (equal? held "") (error "you aren't holding anything.") held)
                    (resolve-in-given-pool (join-words rest) (drop-pool)))))
     (actor-call (room) "drop")
-    (actor-call target "set-parent" (room))
-    (when (equal? target held) (set! held-entry #f))
+    (if (equal? target held)
+      (begin
+        (actor-call target "set-parent" (room))
+        (set! held-entry #f))
+      (hold-target! target (room)))
     nil))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────

@@ -246,6 +246,149 @@ fn production_runtime_resolves_ctx_references() {
 }
 
 #[test]
+fn production_avatar_resolves_exactly_one_exit_actor() {
+    let source = ["stdlib", "runtime", "avatar"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (set! last-room
+                    (make-map "exits"
+                        (list (make-map "actor" "did:ma:exit-hull" "direction" "hull"))))
+                (assert (equal? (resolve-exit "hull") "did:ma:exit-hull"))
+
+                (set! last-room
+                    (make-map "exits"
+                        (list (make-map "actor" "did:ma:exit-one" "direction" "east hatch")
+                                    (make-map "actor" "did:ma:exit-two" "direction" "east door"))))
+                (guard (error
+                                ((string-contains error "matches more than one") "avatar-exit-resolver-ok")
+                                (#t (error error)))
+                    (resolve-exit "east"))
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-exit-resolver-ok");
+}
+
+#[test]
+fn production_avatar_commands_accept_representative_arguments() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.nick: "tester")
+                (#.my.ctx.inv: "did:ma:world#inventory")
+
+                (define lamp (make-map "actor" "did:ma:world#lamp" "name" "Brass Lamp"))
+                (define box (make-map "actor" "did:ma:world#box" "name" "Wooden Box"))
+                (define coin (make-map "actor" "did:ma:world#coin" "name" "Silver Coin"))
+                (define hull-exit
+                    (make-map "actor" "did:ma:world#exit-hull" "direction" "hull"))
+                (define room-snapshot
+                    (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
+                                        "nick" "tester" "name" "Test room" "description" "Ready."
+                                        "who" () "agents" () "things" (list lamp box)
+                                        "exits" (list hull-exit)))
+                (set! last-room room-snapshot)
+
+                (define (actor-call actor method . args)
+                    (assert (string? actor))
+                    (assert (string? method))
+                    (cond ((and (equal? actor "did:ma:world#coin")
+                                (equal? method "set-parent"))
+                           (error "set-parent must be requested by current parent"))
+                          ((equal? method "look")
+                                 (if (equal? actor "did:ma:world#inventory")
+                                     (make-map "things" (list coin))
+                                     room-snapshot))
+                                ((equal? method "contents?") (list coin))
+                                ((equal? method "traverse")
+                                 (make-map "parent" "did:ma:world#room" "nick" "tester"))
+                                ((equal? method "enter") room-snapshot)
+                                ((equal? method "kind?") "/ma/container/0.0.1")
+                                ((equal? method "owner?") "did:ma:owner")
+                                ((equal? method "about") "Brass Lamp\nA test lamp.")
+                                ((equal? method "who?") ())
+                                ((equal? method "occupants?") ())
+                                ((equal? method "things?") (list lamp box))
+                                ((equal? method "exits?") (list hull-exit))
+                                ((equal? method "help") "Actor help")
+                                ((equal? method "forge") "did:ma:world#new-thing")
+                                ((equal? method "remove") "removed")
+                                (else ())))
+
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+
+                (smoke "go" (lambda () (go "hull")))
+                (smoke "dig" (lambda () (dig "east")))
+                (smoke "fill" (lambda () (fill "east")))
+                (smoke "forge" (lambda () (forge "thing" "named" "Test Thing")))
+                (smoke "leave" (lambda () (leave)))
+                (smoke "enter" (lambda () (enter "did:ma:world#room" "tester")))
+
+                (smoke "hold" (lambda () (hold "lamp")))
+                (#.my.ctx.hold-pending:)
+                (smoke "take" (lambda () (take "lamp")))
+                (#.my.ctx.hold-pending:)
+                (#.my.ctx.hold-then:)
+                (smoke "take-from" (lambda () (take-from "box" "coin")))
+                (#.my.ctx.hold-pending:)
+                (#.my.ctx.hold-then:)
+                (#.my.ctx.hold: "did:ma:world#lamp")
+                (smoke "drop" (lambda () (drop)))
+                (#.my.ctx.hold:)
+                (smoke "drop inventory item" (lambda () (drop "coin")))
+                (assert (equal? (#.my.ctx.hold-pending) "did:ma:world#coin"))
+                (assert (equal? (#.my.ctx.hold-then) "did:ma:world#room"))
+                (#.my.ctx.hold-pending:)
+                (#.my.ctx.hold-then:)
+
+                (smoke "put" (lambda () (put "lamp" "in" "box")))
+                (smoke "put-in" (lambda () (put-in "lamp" "in" "box")))
+                (smoke "recycle-from" (lambda () (recycle-from "box" "coin")))
+                (smoke "say" (lambda () (say "hello" "world")))
+                (smoke "emote" (lambda () (emote "waves")))
+                (smoke "claim" (lambda () (claim "lamp")))
+                (smoke "owner" (lambda () (owner "lamp")))
+                (smoke "recycle" (lambda () (recycle "lamp")))
+                (smoke "remove" (lambda () (remove "stale" "child")))
+                (smoke "tell" (lambda () (tell "lamp" "to" "ping" "once")))
+
+                (smoke "here?" (lambda () (here?)))
+                (smoke "who?" (lambda () (who?)))
+                (smoke "occupants?" (lambda () (occupants?)))
+                (smoke "things?" (lambda () (things?)))
+                (smoke "exits?" (lambda () (exits?)))
+                (smoke "inv set" (lambda () (inv "did:ma:world#inventory")))
+                (smoke "inv show" (lambda () (inv)))
+                (smoke "help" (lambda () (help)))
+                (smoke "help target" (lambda () (help "lamp")))
+                (smoke "look" (lambda () (look)))
+                (smoke "look target" (lambda () (look "lamp")))
+                "avatar-commands-ok"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-commands-ok");
+}
+
+#[test]
 fn production_libraries_compose_in_order() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
