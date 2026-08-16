@@ -13,7 +13,7 @@ publish: $(LIBRARY_CIDS) fetch
 zscheme-cid: fetch
 
 fetch: $(BOOTSTRAP_CID)
-	@echo ".z.scheme!fetch /ipfs/$$(cat $(BOOTSTRAP_CID))"
+	@echo ".z.scheme!eval /ipfs/$$(cat $(BOOTSTRAP_CID))"
 
 %.cid: %.zscheme
 	@echo "Publishing $<..."

@@ -277,6 +277,41 @@ fn production_avatar_resolves_exactly_one_exit_actor() {
 }
 
 #[test]
+fn production_avatar_derives_root_when_creating_first_inventory() {
+    let source = ["stdlib", "runtime", "avatar"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.ctx.runtime: "did:ma:world")
+                (define forge-target #f)
+                (define (actor-call actor method . args)
+                    (when (equal? method "forge")
+                        (set! forge-target actor))
+                    "did:ma:world#inventory")
+
+                (assert (equal? (root) "did:ma:world#root"))
+                (assert (equal? (my-inv) "did:ma:world#inventory"))
+                (assert (equal? forge-target "did:ma:world#root"))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#inventory"))
+
+                (#.my.ctx.inv: "did:ma:elsewhere#travelling-bag")
+                (set! forge-target #f)
+                (assert (equal? (my-inv) "did:ma:elsewhere#travelling-bag"))
+                (assert (equal? forge-target #f))
+                "avatar-root-derived"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-root-derived");
+}
+
+#[test]
 fn production_avatar_commands_accept_representative_arguments() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()

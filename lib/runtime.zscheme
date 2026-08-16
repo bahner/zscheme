@@ -21,6 +21,11 @@
 (define (actor-call actor method . args)
   (apply (string-append actor ":" method) args))
 
+; `#root` is the direct-DID profile's fixed local trust anchor. Unlike
+; optional runtime services, its address needs no service-directory lookup.
+(define (root)
+  (string-append (#.my.ctx.runtime) "#root"))
+
 ;; Bare aliases and prose must go through a resolver. Full did:ma: values are
 ;; already wire-ready and may pass straight through higher-level helpers.
 (define (starts-with-did? value)

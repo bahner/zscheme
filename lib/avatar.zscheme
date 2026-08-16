@@ -198,9 +198,9 @@
 ; A bare DID has no actor of its own to hold carried things under, so it
 ; needs one concrete container to serve as that home — forged once as an
 ; orphan of this runtime's root (ma-spec sec 6) and remembered locally from
-; then on. `.my.ctx.inv` is per-runtime, exactly like `.my.ctx.root` itself.
+; then on. `.my.ctx.inv` is per-runtime; root itself is derived by `(root)`.
 (define (create-my-inv!)
-  (let ((created (actor-call (#.my.ctx.root) "forge" (make-map "kind" "/ma/container/0.0.1" "name" "inventory"))))
+  (let ((created (actor-call (root) "forge" (make-map "kind" "/ma/container/0.0.1" "name" "inventory"))))
     (#.my.ctx.inv: created)
     created))
 
