@@ -1,16 +1,19 @@
 LIBRARIES := stdlib runtime avatar events
 LIBRARY_SOURCES := $(LIBRARIES:%=%.zscheme)
 LIBRARY_CIDS := $(LIBRARIES:%=%.cid)
-BOOTSTRAP := .my.z.scheme
+BOOTSTRAP := z.scheme
 BOOTSTRAP_CID := $(BOOTSTRAP).cid
 
-.PHONY: publish zscheme-cid cids clean
+.PHONY: publish zscheme-cid fetch cids clean
 
 # Publish the individual libraries, then their combined source.
-publish: $(LIBRARY_CIDS) $(BOOTSTRAP_CID)
+publish: $(LIBRARY_CIDS) fetch
 
 # Publish only the combined Zion startup source.
-zscheme-cid: $(BOOTSTRAP_CID)
+zscheme-cid: fetch
+
+fetch: $(BOOTSTRAP_CID)
+	@echo ".z.scheme!fetch /ipfs/$$(cat $(BOOTSTRAP_CID))"
 
 %.cid: %.zscheme
 	@echo "Publishing $<..."

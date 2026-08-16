@@ -482,6 +482,87 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
 }
 
 #[test]
+fn production_avatar_give_sends_a_claim_offer_to_one_person() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:bob")
+                (define bob
+                    (make-map "did" "did:ma:bob" "actor" "did:ma:bob"
+                              "name" "Bob" "nick" "Bob"))
+                (define alice
+                    (make-map "did" "did:ma:alice" "actor" "did:ma:alice"
+                              "name" "Alice" "nick" "Alice"))
+                (define duckie
+                    (make-map "actor" "did:ma:world#duckie"
+                              "name" "Rubber Duckie" "nick" "Duckie"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "who" (list bob alice) "agents" ()
+                              "things" (list duckie) "exits" ()))
+
+                (define call-order "")
+                (define called-actor "")
+                (define called-method "")
+                (define called-args ())
+                (define sent-to "")
+                (define sent-body "")
+                (define (random n) 123456789)
+                (define (actor-call actor method . args)
+                    (set! call-order (string-append call-order "rpc "))
+                    (set! called-actor actor)
+                    (set! called-method method)
+                    (set! called-args args)
+                    nil)
+                (define (msg-send target body)
+                    (set! call-order (string-append call-order "msg"))
+                    (set! sent-to target)
+                    (set! sent-body body)
+                    (list ":ok" "message-1"))
+
+                (give "Duckie" "to" "Alice")
+                (assert (equal? call-order "rpc msg"))
+                (assert (equal? called-actor "did:ma:world#duckie"))
+                (assert (equal? called-method "set-recovery-secret"))
+                (assert (equal? called-args (list "123456789-123456789-123456789")))
+                (assert (equal? sent-to "did:ma:alice"))
+                (assert (string-contains sent-body "Bob wants to give you Duckie."))
+                (assert (string-contains sent-body
+                    "claim did:ma:world#duckie 123456789-123456789-123456789"))
+
+                (set! call-order "")
+                (claim "did:ma:world#duckie" "123456789-123456789-123456789")
+                (assert (equal? called-actor "did:ma:world#duckie"))
+                (assert (equal? called-method "claim"))
+                (assert (equal? called-args (list "123456789-123456789-123456789")))
+
+                (set! call-order "")
+                (guard (failure
+                        ((string-contains failure "yourself") #t)
+                        (#t (error failure)))
+                    (give "Duckie" "to" "Bob"))
+                (assert (equal? call-order ""))
+
+                (guard (failure
+                        ((string-contains failure "not a person") #t)
+                        (#t (error failure)))
+                    (give "Duckie" "to" "did:ma:world#other-duckie"))
+                (assert (equal? call-order ""))
+                "avatar-give-ok"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-give-ok");
+}
+
+#[test]
 fn production_libraries_compose_in_order() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()

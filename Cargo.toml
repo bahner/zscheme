@@ -20,6 +20,7 @@ blake3 = "1"
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
+getrandom = "0.4"
 ma-core = { version = "^0.14.4", default-features = false, features = ["config", "iroh", "kubo"] }
 ma-zscheme = "0.5"
 ma-zscheme-yaml = "0.5"

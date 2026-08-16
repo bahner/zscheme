@@ -233,6 +233,12 @@ impl SchemeCtx for CliCtx {
         self.reply_senders.borrow_mut().insert(msg_id, sender);
     }
 
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, String> {
+        let mut bytes = vec![0; len];
+        getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+        Ok(bytes)
+    }
+
     // ── Async ─────────────────────────────────────────────────────────────
 
     fn fetch_path<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {

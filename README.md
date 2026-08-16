@@ -30,9 +30,9 @@ before normal dispatch. Results are spliced back as strings into the command.
 - **Session environment** — definitions persist across the login session
 - **`|` pipe threading** — compose RPC results and Scheme functions in a pipeline
 - **Scriptable docs** — store scripts in any `.my` path, share via IPFS CID
-- **`.my.z.scheme!save`** — serialise your session env to a persistent image
+- **`.z.scheme!save`** — serialise your session env to a persistent image
 - **Stdlib** — common functions in pure zscheme, loadable from IPFS
-- **`include`** — load a script by path: `(include ".my.z.scheme")`
+- **`include`** — load a script by path: `(include ".z.scheme")`
 
 ---
 
@@ -161,22 +161,22 @@ Inside `(…)` expressions, `|` threads a value through a chain of functions:
 Save your definitions between sessions:
 
 ```
-.my.z.scheme!save   ; serialise session env to .my.z.scheme.content
-.my.z.scheme!edit   ; review and clean up
-.my.z.scheme!eval   ; reload after editing
+.z.scheme!save   ; serialise session env to .z.scheme
+.z.scheme!edit   ; review and clean up
+.z.scheme!eval   ; reload after editing
 ```
 
 Auto-load at login:
 
 ```zscheme
-.my.z.scheme.autoload: true
+.z.scheme.autoload: true
 ```
 
 ---
 
 ## Standard library image
 
-For most users, zscheme is one source file. Zion evaluates `.my.z.scheme` at
+For most users, zscheme is one source file. Zion evaluates `.z.scheme` at
 startup. The published default is the physical concatenation of four ordinary
 Scheme libraries, in this order:
 
@@ -188,14 +188,25 @@ Scheme libraries, in this order:
 The separate files are useful when developing extensions. They are not a
 loading requirement for ordinary users.
 
+The avatar library includes consent-based ownership offers:
+
+```text
+give duckie to Alice
+```
+
+Both names resolve locally. Alice receives an ordinary inbox message containing
+`claim <full-object-did-url> <one-time-secret>`; ownership changes only if she
+runs that command. Recipients are other people represented by bare DIDs, not
+objects or the giver's own DID.
+
 Publish only the combined source with:
 
 ```sh
 make zscheme-cid
-cat lib/.my.z.scheme.cid
+cat lib/.z.scheme.cid
 ```
 
-`lib/.my.z.scheme` is an ignored build artefact. The four library files are
+`lib/.z.scheme` is an ignored build artefact. The four library files are
 the authoritative sources; the generated `.cid` file is the immutable
 publication result. To publish both the individual libraries and the combined
 source, use:
@@ -204,10 +215,13 @@ source, use:
 make publish
 ```
 
-Set `.my.z.scheme` in Zion to the resulting immutable source CID:
+Set `.z.scheme` in Zion to the resulting immutable source CID, then publish
+the selected script collection. Everything under `.z` is public code and must
+not contain passwords, keys, or other secrets:
 
 ```text
-.my.z.scheme: /ipfs/<my-scheme-cid>
+.z.scheme: /ipfs/<my-scheme-cid>
+.z!publish @ma
 ```
 
 ---

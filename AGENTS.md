@@ -60,10 +60,18 @@ do not duplicate `resolve-one` plus `actor-call` in each command wrapper.
 `look <object>` uses the same room-plus-inventory candidate pool, but renders
 the resolved child ctx locally rather than calling the target actor.
 
+`give <object...> to <person...>` is a consent-based ownership offer. The
+object resolves through the ordinary room-plus-inventory pool to a DID-URL;
+the recipient resolves only through the room's `who` entries to a different
+bare DID. The avatar sets a host-generated one-time recovery secret on the
+object, then sends the recipient an ordinary text message containing the full
+`claim <object-did-url> <secret>` command. It never changes `owner` directly,
+and received offer text is never evaluated automatically.
+
 `lib/stdlib.zscheme`, `lib/runtime.zscheme`, `lib/avatar.zscheme`, and
 `lib/events.zscheme` are the four authoritative development layers.
-`lib/.my.z.scheme` is their ignored, generated physical concatenation in that
-order; `lib/.my.z.scheme.cid` is the versionable publication result. Use
+`lib/.z.scheme` is their ignored, generated physical concatenation in that
+order; `lib/.z.scheme.cid` is the versionable publication result. Use
 `make zscheme-cid` to publish only that combined startup source. Keep the
 composition ordinary Scheme; do not add a namespace, module, or dynamic loading
 framework around it.

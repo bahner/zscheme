@@ -75,6 +75,8 @@
       (append (event-list-values (map-ref room "things" ()))
         (event-list-values (map-ref room "exits" ()))))))
 
+(define (person-pool room) (event-list-values (map-ref room "who" ())))
+
 (define (exit-pool room) (event-list-values (map-ref room "exits" ())))
 
 ; Cheap first (search what we already have cached), fresh only if needed:
@@ -133,6 +135,19 @@
   ;; Most verbs want exactly one actor, so this is their common command-boundary
   ;; conversion from a human word to a wire-ready DID/DID-URL.
   (entry-actor (resolve-one-entry word (default-pool))))
+
+(define (bare-did? value)
+  (and (starts-with-did? value) (not (string-contains value "#"))))
+
+(define (resolve-person word)
+  (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
+         (entry (resolve-one-entry word (if (map? room1) (person-pool room1) ())))
+         (did (entry-actor entry)))
+    (cond ((not (bare-did? did))
+           (error (string-append "\"" word "\" is not a person.")))
+          ((equal? did (#.my.identity.did))
+           (error "you can't give something to yourself."))
+          (else did))))
 
 ; The ordinary object-command boundary. Every caller supplies a human object
 ; reference first; resolution, no-match, and ambiguity are handled here before
@@ -428,9 +443,48 @@
   (room-call "emote" (join-words words))
   nil)
 
-(define (claim name)
-  (command name "claim")
-  nil)
+(define (claim-usage-error)
+  (error "usage: claim <object> [secret]"))
+
+(define (claim name . secret)
+  (if (or (null? secret) (null? (cdr secret)))
+    (begin
+      (apply command name "claim" secret)
+      nil)
+    (claim-usage-error)))
+
+(define (give-usage-error)
+  (error "usage: give <object...> to <person...>"))
+
+(define (claim-secret)
+  (string-append
+    (number->string (random 9223372036854775807)) "-"
+    (number->string (random 9223372036854775807)) "-"
+    (number->string (random 9223372036854775807))))
+
+; Giving is an offer, not a unilateral ownership change. The current owner
+; installs a one-time recovery secret, then sends the recipient an ordinary
+; inbox message. Nothing changes until that person runs the included claim.
+(define (give . words)
+  (let ((object-words (words-before-keyword words "to"))
+        (person-words (words-after-keyword words "to")))
+    (if (or (null? object-words) (not person-words) (null? person-words))
+      (give-usage-error)
+      (let* ((object-text (join-words object-words))
+             (object-entry (resolve-one-entry object-text (default-pool)))
+             (object (entry-actor object-entry))
+             (recipient (resolve-person (join-words person-words))))
+        (if (or (bare-did? object) (not (starts-with-did? object)))
+          (error (string-append "\"" object-text "\" is not an object."))
+          (let* ((token (claim-secret))
+                 (giver-entry (candidate-for-did (person-pool last-room) (#.my.identity.did)))
+                 (message (string-append
+                            (event-name giver-entry) " wants to give you "
+                            (event-name object-entry) ". Accept with: claim "
+                            object " " token)))
+            (actor-call object "set-recovery-secret" token)
+            (let ((sent (msg-send recipient message)))
+              (if (ok? sent) nil (error (err-msg sent))))))))))
 
 (define (owner name)
   (display (command name "owner?"))
