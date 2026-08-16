@@ -32,13 +32,29 @@
 ; resolver before addressing anything directly. A bare `did:ma:` string always
 ; passes through unresolved.
 
+(define (candidate-location entry)
+  (let ((parent (map-ref entry "parent" #f))
+        (inventory (my-inv-if-any)))
+    (cond ((and (string? parent) inventory (equal? parent inventory))
+           "inventory")
+          ((and (string? parent)
+                (map? last-room)
+                (equal? parent (map-ref last-room "actor" #f)))
+           (let ((room-name (map-ref last-room "name" #f)))
+             (if (and (string? room-name) (not (equal? room-name "")))
+               room-name
+               #f)))
+          (else #f))))
+
 (define (describe-candidate entry)
-  (let ((nick (map-ref entry "nick" #f)))
+  (let ((nick (map-ref entry "nick" #f))
+        (location (candidate-location entry)))
     (string-append (map-ref entry "name" (entry-actor entry))
                    (if (and (string? nick) (not (equal? nick "")))
                        (string-append " \"" nick "\"")
                        "")
-                   " (" (entry-actor entry) ")")))
+                   " (" (entry-actor entry) ")"
+                   (if location (string-append " in " location) ""))))
 
 ; Ambiguity is the user's problem to resolve, not ours to guess at: list every
 ; candidate's DID so they can repeat the command unambiguously.

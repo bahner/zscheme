@@ -389,7 +389,7 @@ fn production_avatar_commands_accept_representative_arguments() {
 }
 
 #[test]
-fn production_avatar_resolves_all_room_children_or_reports_ambiguity() {
+fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -413,15 +413,34 @@ fn production_avatar_resolves_all_room_children_or_reports_ambiguity() {
                 (define mirror
                     (make-map "actor" "did:ma:world#mirror" "name" "Mirror"
                                         "direction" "mirror" "description" "An exit."))
+                (define inventory-coin
+                    (make-map "actor" "did:ma:world#coin" "name" "Coin"
+                                        "description" "An inventory coin."))
+                (define room-duckie
+                    (make-map "actor" "did:ma:world#room-duckie"
+                                        "parent" "did:ma:world#room"
+                                        "name" "Rubber Duckie" "nick" "Duckie"))
+                (define inventory-duckie
+                    (make-map "actor" "did:ma:world#inventory-duckie"
+                                        "parent" "did:ma:world#inventory"
+                                        "name" "Rubber Duckie" "nick" "Duckie"))
                 (set! last-room
-                    (make-map "who" (make-map "did:ma:attila" direct-attila)
+                    (make-map "actor" "did:ma:world#room" "name" "The Construct"
+                                        "who" (make-map "did:ma:attila" direct-attila)
                                         "agents" (list agent-attila)
-                                        "things" (list lamp) "exits" (list mirror)))
+                                        "things" (list lamp room-duckie)
+                                        "exits" (list mirror)))
+                (#.my.ctx.inv: "did:ma:world#inventory")
 
-                (define (actor-call actor method . params) actor)
+                (define (actor-call actor method . params)
+                    (if (and (equal? actor "did:ma:world#inventory")
+                             (equal? method "contents?"))
+                        (list inventory-coin inventory-duckie)
+                        actor))
 
                 (assert (equal? (command "Lamp" "probe") "did:ma:world#lamp"))
                 (assert (equal? (command "Mirror" "probe") "did:ma:world#mirror"))
+                (assert (equal? (command "Coin" "probe") "did:ma:world#coin"))
 
                 (guard (failure
                         ((and (string-contains failure "matches more than one")
@@ -430,10 +449,26 @@ fn production_avatar_resolves_all_room_children_or_reports_ambiguity() {
                         (#t (error failure)))
                     (command "Attila" "probe"))
 
+                (guard (failure
+                        ((and (string-contains failure
+                                "Rubber Duckie \"Duckie\" (did:ma:world#room-duckie) in The Construct")
+                              (string-contains failure
+                                "Rubber Duckie \"Duckie\" (did:ma:world#inventory-duckie) in inventory")) #t)
+                        (#t (error failure)))
+                    (command "Duckie" "probe"))
+
+                (assert (equal?
+                    (describe-candidate
+                        (make-map "actor" "did:ma:world#boxed-duckie"
+                                  "parent" "did:ma:world#box"
+                                  "name" "Rubber Duckie" "nick" "Duckie"))
+                    "Rubber Duckie \"Duckie\" (did:ma:world#boxed-duckie)"))
+
                 (set! last-room
-                    (make-map "who" (make-map "did:ma:attila" direct-attila)
+                    (make-map "actor" "did:ma:world#room" "name" "The Construct"
+                                        "who" (make-map "did:ma:attila" direct-attila)
                                         "agents" () "things" (list lamp) "exits" (list mirror)))
-                (look "Attila")
+                (look "Coin")
                 "room-child-resolver-ok"
                 "#
     );
@@ -442,7 +477,7 @@ fn production_avatar_resolves_all_room_children_or_reports_ambiguity() {
     assert_eq!(value.display(), "room-child-resolver-ok");
     assert_eq!(
         test_ctx.output.borrow().as_str(),
-        "Attila\nA direct DID presence."
+        "Coin\nAn inventory coin."
     );
 }
 

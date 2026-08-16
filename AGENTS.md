@@ -50,10 +50,15 @@ semantics themselves.
 All object arguments use one room-child resolver over `who`, `agents`,
 `things`, and `exits`, followed by inventory contents. Exactly one match is
 accepted; no match is an error, and multiple matches list their DID/DID-URLs so
-the user can rephrase or supply an exact address. A bare DID has no identity
-actor, so `look` renders the resolved child ctx rather than requiring an RPC.
+the user can rephrase or supply an exact address. An ambiguous candidate also
+shows `in inventory` when its ctx parent matches `.my.ctx.inv`, or `in <room
+name>` when its parent matches the cached room ctx actor. Other parents are not
+looked up or labelled. A bare DID has no identity actor, so `look` renders the
+resolved child ctx rather than requiring an RPC.
 Ordinary object RPC verbs dispatch through `(command object method . params)`;
 do not duplicate `resolve-one` plus `actor-call` in each command wrapper.
+`look <object>` uses the same room-plus-inventory candidate pool, but renders
+the resolved child ctx locally rather than calling the target actor.
 
 `lib/stdlib.zscheme`, `lib/runtime.zscheme`, `lib/avatar.zscheme`, and
 `lib/events.zscheme` are the four authoritative development layers.
