@@ -95,6 +95,9 @@
 (define (event-fill ctx direction)
   (display (string-append (event-name ctx) " fills " direction ".")))
 
+(define (event-parent ctx)
+  (handle-avatar-parent! ctx))
+
 ;; ── Data-directed event dispatch ────────────────────────────────────────────
 ;;
 ;; Adding a presentation-only event means defining one procedure and adding one
@@ -110,7 +113,8 @@
             ":take" event-take
             ":drop" event-drop
             ":dig" event-dig
-            ":fill" event-fill))
+            ":fill" event-fill
+            ":parent" event-parent))
 
 ; Any broadcast that can change who/what is present or reachable in this
 ; room — someone else arriving/leaving/taking/dropping/digging/filling —

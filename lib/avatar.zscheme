@@ -282,22 +282,22 @@
 
 ;; ── One hand, one transfer at a time ────────────────────────────────────────
 ;;
-;; `.my.ctx.hold*` is durable Zion-side sequencing state. `held-entry` below is
-;; only an in-memory label cache; actor DIDs and parent handshakes remain the
-;; authority. Zion's inbox poller advances pending and queued transitions.
+;; `.my.ctx.hold*` is durable zscheme-side sequencing state. `held-entry` below
+;; is only an in-memory label cache; actor DIDs and parent handshakes remain
+;; the authority. Typed `:parent` events arrive through `on-event`, which this
+;; avatar layer handles below.
 
-; Zion's own single-slot analogue of ownership: holding something sets its
-; parent directly to your own DID (ma-spec sec 4/6 place no restriction on a
+; The avatar's single-slot analogue of ownership: holding something sets its
+; parent directly to your own DID (ma-spec sec 4/6 places no restriction on a
 ; parent being a bare avatar). `hold`/`take`/`take-from` all start the same
 ; two-hop handshake: ask the item to propose itself to you (:hold, which
 ; targets msg-from implicitly — unlike :set-parent it takes no DID-URL
 ; argument), then wait for its own resulting `:parent` proposal to actually
 ; arrive addressed to you. Confirming that proposal (replying `:child`) —
 ; and later clearing the slot on the item's departure notice — is not
-; something this evaluator can do on its own: the proposal is a separate,
-; later, unsolicited message, not a return value of this call. That
-; confirm/clear wiring lives in ma-zion's inbox_poll.rs
-; (handle_hold_parent_proposal). The visible outcome (or a refusal such as
+; something this call can do on its own: the proposal is a separate, later,
+; unsolicited `:parent` event, not a return value. `handle-avatar-parent!`
+; below confirms and advances that event. The visible outcome (or a refusal such as
 ; "nailed to the floor") still arrives on the room's print/event channel,
 ; not the RPC ack (ma-spec sec 8).
 (define (my-hold)
@@ -306,12 +306,60 @@
 (define (my-hold-pending)
   (guard (e (#t "")) (#.my.ctx.hold-pending)))
 
+(define (my-hold-confirming)
+  (guard (e (#t "")) (#.my.ctx.hold-confirming)))
+
 (define (my-hold-queued)
   (guard (e (#t "")) (#.my.ctx.hold-queued)))
 
 (define (clear-queued-hold!)
   (#.my.ctx.hold-queued:)
   (#.my.ctx.hold-queued-then:))
+
+(define (clear-hold-pending!)
+  (#.my.ctx.hold-pending:)
+  (#.my.ctx.hold-confirming:)
+  (#.my.ctx.hold-then:))
+
+; `:parent` is an unsolicited actor event. Zion only delivers the typed ctx;
+; avatar policy decides whether to confirm, sequence a follow-up move, or
+; clear the hand. The second parent announcement after :child proves that the
+; actor committed this bare DID as parent before :set-parent is sent.
+(define (handle-avatar-parent! ctx)
+  (let ((actor (map-ref ctx "actor" ""))
+        (parent (map-ref ctx "parent" ""))
+        (pending (my-hold-pending))
+        (confirming (my-hold-confirming))
+        (held (my-hold))
+        (then (guard (e (#t "")) (#.my.ctx.hold-then)))
+        (queued (my-hold-queued))
+        (queued-then (guard (e (#t "")) (#.my.ctx.hold-queued-then)))
+        (self (#.my.identity.did)))
+    (cond ((and (not (equal? pending ""))
+                (equal? pending actor)
+                (not (equal? confirming actor))
+                (equal? parent self))
+           (begin
+             (#.my.ctx.hold-confirming: actor)
+             (actor-call actor "child" ctx)))
+          ((and (equal? confirming actor) (equal? parent self))
+           (begin
+             (#.my.ctx.hold: actor)
+             (clear-hold-pending!)
+             (if (equal? then "") nil (actor-call actor "set-parent" then))))
+          ((and (equal? held actor) (not (equal? parent self)))
+           (begin
+             (#.my.ctx.hold:)
+             (clear-queued-hold!)
+             (if (equal? queued "")
+                 nil
+                 (begin
+                   (#.my.ctx.hold-pending: queued)
+                   (if (equal? queued-then "")
+                       (#.my.ctx.hold-then:)
+                       (#.my.ctx.hold-then: queued-then))
+                   (actor-call queued "hold")))))
+          (else nil))))
 
 (define (queue-hold-after-stow! held target then)
   (#.my.ctx.hold-queued: target)

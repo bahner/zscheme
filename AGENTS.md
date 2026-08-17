@@ -47,6 +47,13 @@ ownership lifecycle. The avatar therefore owns the human-facing interpretation
 and the one-argument convenience wrappers, not the authoritative runtime
 semantics themselves.
 
+All lambda-ma avatar and play-time policy belongs exclusively in the composed
+`.z.scheme` layers, particularly `lib/avatar.zscheme` and `lib/events.zscheme`.
+The host delivers typed unsolicited events but must not sequence `:hold`,
+`:child`, `:set-parent`, `:claim`, `:drop`, `:put`, or any other world verb.
+`on-event` in zscheme owns `:parent` handshakes and every
+container/duckie/object-transfer decision.
+
 All object arguments use one room-child resolver over `who`, `agents`,
 `things`, and `exits`, followed by inventory contents. Exactly one match is
 accepted; no match is an error, and multiple matches list their DID/DID-URLs so
