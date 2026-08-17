@@ -48,15 +48,13 @@
   ;; needs no extra RPC and must not mutate the avatar's cached snapshot.
   (let ((name (map-ref room "name" (event-name room)))
         (description (map-ref room "description" ""))
-        (who (map-ref room "who" '()))
-        (occupants (map-ref room "agents" '()))
+      (occupants (map-ref room "agents" '()))
         (things (map-ref room "things" '()))
         (exits (map-ref room "exits" '())))
     (display
       (string-append
         name
         (if (string? description) (string-append "\n" description) "")
-        (event-list-lines "\nHere:" who event-name)
         (event-list-lines "\nOccupants:" occupants event-name)
         (event-list-lines "\nThings:" things event-name)
         (event-exit-lines "\nExits:" exits)))))

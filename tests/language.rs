@@ -119,6 +119,33 @@ fn eval(source: &str) -> Result<(SchemeVal, Rc<TestCtx>), SchemeErr> {
     Ok((value, test_ctx))
 }
 
+#[test]
+fn production_events_render_humans_and_agents_as_occupants() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (event-look
+                    (make-map "name" "Atrium" "description" "Quiet."
+                              "who" (list (make-map "name" "Alice"))
+                              "agents" (list (make-map "name" "Alice")
+                                             (make-map "name" "Attila"))
+                              "exits" (list (make-map "direction" "mirror"))))
+                "#
+    );
+
+    let (_, ctx) = eval(&source).unwrap();
+    assert_eq!(
+        ctx.output.borrow().as_str(),
+        "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nExits:\nmirror"
+    );
+}
+
 fn eval_file(path: &Path) -> Result<SchemeVal, SchemeErr> {
     let source = fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read functional test {}: {err}", path.display()));
