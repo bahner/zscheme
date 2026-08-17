@@ -362,7 +362,7 @@ fn production_avatar_commands_accept_representative_arguments() {
                 (define room-snapshot
                     (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
                                         "nick" "tester" "name" "Test room" "description" "Ready."
-                                        "who" () "agents" () "things" (list lamp box)
+                                        "who" () "agents" () "things" (list lamp)
                                         "exits" (list hull-exit)))
                 (set! last-room room-snapshot)
 
@@ -376,7 +376,11 @@ fn production_avatar_commands_accept_representative_arguments() {
                                  (if (equal? actor "did:ma:world#inventory")
                                      (make-map "things" (list coin))
                                      room-snapshot))
-                                ((equal? method "contents?") (list coin))
+                                  ((and (equal? actor "did:ma:world#inventory")
+                                      (equal? method "contents?")) (list coin box))
+                                  ((and (equal? actor "did:ma:world#box")
+                                      (equal? method "contents?")) (list coin))
+                                  ((equal? method "contents?") ())
                                 ((equal? method "traverse")
                                  (make-map "parent" "did:ma:world#room" "nick" "tester"))
                                 ((equal? method "enter") room-snapshot)
@@ -420,8 +424,16 @@ fn production_avatar_commands_accept_representative_arguments() {
                 (#.my.ctx.hold-pending:)
                 (#.my.ctx.hold-then:)
 
-                (smoke "put" (lambda () (put "lamp" "in" "box")))
+                (smoke "put inventory item" (lambda () (put "coin" "in" "box")))
+                (assert (equal? (#.my.ctx.hold-pending) "did:ma:world#coin"))
+                (assert (equal? (#.my.ctx.hold-then) "did:ma:world#box"))
+                (#.my.ctx.hold-pending:)
+                (#.my.ctx.hold-then:)
                 (smoke "put-in" (lambda () (put-in "lamp" "in" "box")))
+                (assert (equal? (#.my.ctx.hold-pending) "did:ma:world#lamp"))
+                (assert (equal? (#.my.ctx.hold-then) "did:ma:world#box"))
+                (#.my.ctx.hold-pending:)
+                (#.my.ctx.hold-then:)
                 (smoke "recycle-from" (lambda () (recycle-from "box" "coin")))
                 (smoke "say" (lambda () (say "hello" "world")))
                 (smoke "emote" (lambda () (emote "waves")))

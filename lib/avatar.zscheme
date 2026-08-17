@@ -416,16 +416,20 @@
   (error "usage: put <item...> in <container...>"))
 
 ; Like forge/tell, `in` is a hard separator so both references may use their
-; human-readable multi-word names. Relocation is performed directly on the
-; resolved item; the item need not first be placed in the hand.
+; human-readable multi-word names. An item already in hand can move directly.
+; Otherwise we temporarily hold it, then Zion relays :set-parent to the
+; container after confirming the item as our child.
 (define (put . words)
   (let ((item-words (words-before-keyword words "in"))
         (container-words (words-after-keyword words "in")))
     (if (or (null? item-words) (not container-words) (null? container-words))
       (put-usage-error)
-      (let ((item (join-words item-words))
-        (container (resolve-one (join-words container-words))))
-        (command item "set-parent" container)
+      (let* ((entry (resolve-one-entry (join-words item-words) (default-pool)))
+             (item (entry-actor entry))
+             (container (resolve-one (join-words container-words))))
+        (if (equal? item (my-hold))
+            (actor-call item "set-parent" container)
+            (hold-target! item container))
         nil))))
 
 (define (put-in . words)
