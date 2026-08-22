@@ -190,7 +190,13 @@
 (define (apply-entry-ctx! ctx)
   (when (map? ctx)
     (let ((parent (map-ref ctx "parent" #f)))
-      (when parent (#.my.ctx.room: parent)))
+      (when parent
+        (#.my.ctx.room: parent)
+        ; register avatar location with root so it can validate spatial actions
+        (actor-call (root) "ctx-update"
+                    (make-map "actor" (#.my.identity.did)
+                              "kind" "agent"
+                              "parent" parent))))
     (let ((nick (map-ref ctx "nick" #f)))
       (if (and (string? nick) (not (equal? nick "")))
         (#.my.ctx.nick: nick)
@@ -311,29 +317,48 @@
     (if (or (null? item-words)
             (and container-words (null? container-words)))
       (error "usage: take <item...> [from <container...>]")
-            (let* ((item (join-words item-words))
-              (target (if container-words
-              (resolve-in-container item (resolve-one (join-words container-words)))
-              (entry-actor (resolve-one-entry item (resolve-room-pool))))))
-         (hold-target! target)
-        nil))))
+      (if container-words
+        (let* ((container (resolve-one (join-words container-words)))
+               (item (resolve-in-container (join-words item-words) container))
+               (id (actor-call container "take" item)))
+          (when (string? id) (pending-store! id))
+          nil)
+        (let ((target (entry-actor (resolve-one-entry (join-words item-words) (resolve-room-pool)))))
+          (hold-target! target)
+          nil)))))
 
 (define (take-from container name)
   (hold-target! (resolve-in-container name (resolve-one container))))
 
-; drop acts only on the item in hand. The room pre-checks capacity first.
+; drop routes through root so the move is validated and tracked.
 (define (drop . rest)
   (let ((target (if (null? rest)
                   (error "drop requires an object reference.")
                   (resolve-one (join-words rest)))))
     (actor-call (room) "drop")
-    (actor-call target "set-parent" (room))
-    nil))
+    (let* ((id (claim-secret))
+           (action-ctx (make-map
+                          "action" "drop"
+                          "id" id
+                          "subject" (#.my.identity.did)
+                          "child" target
+                          "parent" (room))))
+      (actor-call (root) "action" action-ctx)
+      (pending-store! id)
+      nil)))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
 (define (put-usage-error)
   (error "usage: put <item...> in <container...>"))
+
+(define pending-actions (make-map))
+
+(define (pending-store! id)
+  (set! pending-actions (map-set pending-actions id #t)))
+
+(define (pending-clear! id)
+  (set! pending-actions (map-delete pending-actions id)))
 
 ; Like forge/tell, `in` is a hard separator so both references may use their
 ; human-readable multi-word names. Resolution is based on the current ctx.
@@ -343,8 +368,9 @@
     (if (or (null? item-words) (not container-words) (null? container-words))
       (put-usage-error)
       (let* ((item (resolve-one (join-words item-words)))
-             (container (resolve-one (join-words container-words))))
-        (actor-call item "set-parent" container)
+             (container (resolve-one (join-words container-words)))
+             (id (actor-call container "put" item)))
+        (when (string? id) (pending-store! id))
         nil))))
 
 (define (put-in . words)

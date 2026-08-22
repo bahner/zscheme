@@ -89,6 +89,18 @@
 (define (event-drop ctx)
   (display (string-append (event-name ctx) " drops something.")))
 
+; Personal completion events — clear pending entry, display failure if any.
+(define (event-action-done action-ctx)
+  (let ((id (map-ref action-ctx "id" #f))
+        (status (map-ref action-ctx "status" "ok")))
+    (when id (pending-clear! id))
+    (when (not (equal? status "ok"))
+      (display (string-append "Failed: " (map-ref action-ctx "reason" "unknown"))))))
+
+(define event-put event-action-done)
+(define event-take-done event-action-done)
+(define event-drop-done event-action-done)
+
 (define (event-dig ctx direction)
   (display (string-append (event-name ctx) " digs " direction ".")))
 
@@ -137,7 +149,10 @@
             ":dig" event-dig
             ":fill" event-fill
             ":parent" event-parent
-            ":ctx" event-room-ctx))
+            ":ctx" event-room-ctx
+            ":put-event" event-put
+            ":take-event" event-take-done
+            ":drop-event" event-drop-done))
 
 ; Any broadcast that can change who/what is present or reachable in this
 ; room — someone else arriving/leaving/taking/dropping/digging/filling —
@@ -148,7 +163,7 @@
 ; someone who just arrived — the intermittent "sometimes 2 duckies, sometimes
 ; none" symptom.
 (define room-invalidating-events
-  (list ":arrive" ":leave" ":take" ":drop" ":dig" ":fill"))
+  (list ":arrive" ":leave" ":take" ":drop" ":dig" ":fill" ":put-event"))
 
 (define (on-event event args)
   ;; Unknown events are ignored: this client may be older than the actor that
