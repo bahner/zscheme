@@ -289,7 +289,10 @@
   (let ((parent (map-ref ctx "parent" ""))
         (self (#.my.identity.did)))
     (when (equal? parent self)
-      (actor-call (map-ref ctx "actor" "") "child" ctx))))
+      (guard (e (#t #f))
+        (let ((actor (map-ref ctx "actor" "")))
+          (actor-call actor "child" ctx)
+          (actor-call actor "set-parent" (my-inv)))))))
 
 (define (hold-target! target)
   (actor-call target "hold"))
