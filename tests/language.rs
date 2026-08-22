@@ -340,6 +340,7 @@ fn production_avatar_derives_root_when_creating_first_inventory() {
 
 const AVATAR_TEST_PREAMBLE: &str = r#"
                 (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.runtime: "did:ma:world")
                 (#.my.ctx.room: "did:ma:world#room")
                 (#.my.ctx.nick: "tester")
                 (#.my.ctx.inv: "did:ma:world#inventory")
@@ -421,13 +422,13 @@ const AVATAR_TEST_SMOKES: &str = r#"
                 (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#coin"))
                 (assert (equal? (car (cdr (car (reverse actor-calls)))) "hold"))
                 (smoke "take from container" (lambda () (take "Silver" "Coin" "from" "Wooden" "Box")))
-                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#coin"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "hold"))
+                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#box"))
+                (assert (equal? (car (cdr (car (reverse actor-calls)))) "take"))
                 (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
                                                       "parent" "did:ma:me")))
                 (smoke "put held item" (lambda () (put "coin" "in" "box")))
                 (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#coin"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "set-parent"))
+                (assert (equal? (car (cdr (car (reverse actor-calls)))) "put"))
                 (smoke "recycle-from" (lambda () (recycle-from "box" "coin")))
                 (smoke "roll-call" (lambda () (roll-call "box")))
                 (smoke "say" (lambda () (say "hello" "world")))
