@@ -338,17 +338,7 @@ fn production_avatar_derives_root_when_creating_first_inventory() {
     assert_eq!(value.display(), "avatar-root-derived");
 }
 
-#[test]
-fn production_avatar_commands_accept_representative_arguments() {
-    let source = ["stdlib", "runtime", "avatar", "events"]
-        .into_iter()
-        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let source = format!(
-        r#"
-                {source}
-
+const AVATAR_TEST_PREAMBLE: &str = r#"
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
                 (#.my.ctx.nick: "tester")
@@ -409,7 +399,9 @@ fn production_avatar_commands_accept_representative_arguments() {
                 (define (smoke name thunk)
                     (guard (failure (#t (error (string-append name ": " failure))))
                         (thunk)))
+"#;
 
+const AVATAR_TEST_SMOKES: &str = r#"
                 (smoke "go" (lambda () (go "hull")))
                 (smoke "dig" (lambda () (dig "east")))
                 (smoke "fill" (lambda () (fill "east")))
@@ -458,10 +450,20 @@ fn production_avatar_commands_accept_representative_arguments() {
                 (smoke "look" (lambda () (look)))
                 (smoke "look target" (lambda () (look "lamp")))
                 "avatar-commands-ok"
-                "#
-    );
+"#;
 
-    let (value, _) = eval(&source).unwrap();
+fn avatar_command_test_source() -> String {
+    let libs = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{libs}\n{AVATAR_TEST_PREAMBLE}\n{AVATAR_TEST_SMOKES}")
+}
+
+#[test]
+fn production_avatar_commands_accept_representative_arguments() {
+    let (value, _) = eval(&avatar_command_test_source()).unwrap();
     assert_eq!(value.display(), "avatar-commands-ok");
 }
 

@@ -330,22 +330,11 @@
 (define (take-from container name)
   (hold-target! (resolve-in-container name (resolve-one container))))
 
-; drop routes through root so the move is validated and tracked.
 (define (drop . rest)
-  (let ((target (if (null? rest)
-                  (error "drop requires an object reference.")
-                  (resolve-one (join-words rest)))))
-    (actor-call (room) "drop")
-    (let* ((id (claim-secret))
-           (action-ctx (make-map
-                          "action" "drop"
-                          "id" id
-                          "subject" (#.my.identity.did)
-                          "child" target
-                          "parent" (room))))
-      (actor-call (root) "action" action-ctx)
-      (pending-store! id)
-      nil)))
+  (let ((target (resolve-one (join-words rest))))
+    (actor-call (room) "drop" target)
+    (actor-call target "set-parent" (room))
+    nil))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
@@ -369,7 +358,8 @@
       (put-usage-error)
       (let* ((item (resolve-one (join-words item-words)))
              (container (resolve-one (join-words container-words)))
-             (id (actor-call container "put" item)))
+             ; Item initiates put: it validates auth, builds put-ctx, asks root.
+             (id (actor-call item "put" container)))
         (when (string? id) (pending-store! id))
         nil))))
 
@@ -504,6 +494,13 @@
 (define (here?)
   (room))
 
+;; Meta/inspect — resolve a visible name to its wire DID-URL for direct RPC use.
+(define (did? . rest)
+  (if (null? rest)
+    (error "usage: did? <name...>")
+    (display (resolve-one (join-words rest))))
+  nil)
+
 (define (who?)
   (event-who (room-call "who?"))
   nil)
@@ -583,7 +580,10 @@
         "fill <direction>        remove an exit\n"
         "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"
         "enter <target> <nick>   enter a room directly by address\n"
-        "leave                   leave the current room")))
+        "leave                   leave the current room\n"
+        "\n"
+        "--- meta ---\n"
+        "did? <name...>          resolve a visible name to its DID-URL for direct RPC")))
   nil)
 
 ;; `look` stays with the command vocabulary even though `event-look` renders
