@@ -476,9 +476,7 @@
       ;; same formatters serve solicited replies and unsolicited room events.
 
 (define (here?)
-  (let ((r (room)))
-    (display r)
-    r))
+  (room))
 
 (define (who?)
   (event-who (room-call "who?"))
