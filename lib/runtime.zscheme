@@ -75,15 +75,19 @@
 ;; result set.
 
 (define (name-matches? word entry key)
-  ;; Matching is case-insensitive and deliberately accepts substrings. The
-  ;; command boundary, not this data helper, decides whether many hits are an
-  ;; error or a useful result set.
+  ;; Case-insensitive whole-word match: every word in the query must appear as a
+  ;; standalone word in the value. "kiste" matches "Kiste" but not "Guldkiste";
+  ;; "wooden box" still matches "Wooden Box".
   (let* ((value (map-ref entry key #f))
-         (needle (string-downcase word))
-         (haystack (if (string? value) (string-downcase value) "")))
+         (needle-words (filter (lambda (w) (not (equal? w "")))
+                               (string-split (string-downcase word) " "))))
     (and (string? value)
-         (or (equal? needle haystack)
-             (string-contains haystack needle)))))
+         (not (null? needle-words))
+         (let ((haystack-words (filter (lambda (w) (not (equal? w "")))
+                                       (string-split (string-downcase value) " "))))
+           (fold (lambda (nw acc) (and acc (member nw haystack-words)))
+                 #t
+                 needle-words)))))
 
 (define (candidates-by-keys word pool keys)
   ;; Keys express preference. Stop at the first attribute with any matches so
