@@ -448,14 +448,34 @@
         (unless (null? reply) (display reply))
         nil))))
 
+;; ── Property setters ───────────────────────────────────────────────────────
+
+(define (prop target key . value-words)
+  (display (apply command target "prop" key value-words))
+  nil)
+
+; `as` separates target from value, so multi-word names and descriptions need
+; no quoting: `name golden duckie as The Golden Duckie`.
+(define (prop-as-sugar prop-key words)
+  (let ((target-words (words-before-keyword words "as"))
+        (value-words (words-after-keyword words "as")))
+    (if (or (null? target-words) (not value-words))
+      (error (string-append "usage: " prop-key " <target...> as <value...>"))
+      (apply prop (join-words target-words) prop-key value-words))))
+
+(define (name . words) (prop-as-sugar "name" words))
+(define (describe . words) (prop-as-sugar "description" words))
+(define (nick . words) (prop-as-sugar "nick" words))
+
       ;; ── Queries and inventory views ─────────────────────────────────────────────
       ;;
       ;; Query RPCs return structured data. The event library owns rendering so the
       ;; same formatters serve solicited replies and unsolicited room events.
 
 (define (here?)
-  (display (room))
-  nil)
+  (let ((r (room)))
+    (display r)
+    r))
 
 (define (who?)
   (event-who (room-call "who?"))
@@ -522,6 +542,10 @@
         "roll-call <container>       check a container's children\n"
         "inv                     show what you're holding and your own inventory\n"
         "inv <container>         point your inventory at any container\n"
+        "prop <target> <key> [value...]  set a named prop on any actor\n"
+        "name <target...> as <name...>   set the name prop\n"
+        "describe <target...> as <text...>  set the description prop\n"
+        "nick <target...> as <nick...>   set the nick prop\n"
         "say <text>              say something aloud\n"
         "emote <text>            perform an emote\n"
         "claim <name>            claim ownership of something\n"
