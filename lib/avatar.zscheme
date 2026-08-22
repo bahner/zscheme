@@ -126,10 +126,12 @@
 (define (resolve-one-entry word pool)
   (if (starts-with-did? word)
     (candidate-for-did pool word)
-    (let ((hits (resolve-ref word pool)))
-      (cond ((null? hits) (no-match-error word))
-            ((null? (cdr hits)) (candidate-for-did pool (car hits)))
-            (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits)))))))
+    (if (or (equal? word "inv") (equal? word "inventory"))
+      (candidate-for-did pool (my-inv))
+      (let ((hits (resolve-ref word pool)))
+        (cond ((null? hits) (no-match-error word))
+              ((null? (cdr hits)) (candidate-for-did pool (car hits)))
+              (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits))))))))
 
 (define (resolve-one word)
   ;; Most verbs want exactly one actor, so this is their common command-boundary
@@ -280,182 +282,49 @@
     (if (map? result) (look) (display result)))
   nil)
 
-;; ── One hand, one transfer at a time ────────────────────────────────────────
-;;
-;; `.my.ctx.hold*` is durable zscheme-side sequencing state. `held-entry` below
-;; is only an in-memory label cache; actor DIDs and parent handshakes remain
-;; the authority. Typed `:parent` events arrive through `on-event`, which this
-;; avatar layer handles below.
-
-; The avatar's single-slot analogue of ownership: holding something sets its
-; parent directly to your own DID (ma-spec sec 4/6 places no restriction on a
-; parent being a bare avatar). `hold`/`take`/`take-from` all start the same
-; two-hop handshake: ask the item to propose itself to you (:hold, which
-; targets msg-from implicitly — unlike :set-parent it takes no DID-URL
-; argument), then wait for its own resulting `:parent` proposal to actually
-; arrive addressed to you. Confirming that proposal (replying `:child`) —
-; and later clearing the slot on the item's departure notice — is not
-; something this call can do on its own: the proposal is a separate, later,
-; unsolicited `:parent` event, not a return value. `handle-avatar-parent!`
-; below confirms and advances that event. The visible outcome (or a refusal such as
-; "nailed to the floor") still arrives on the room's print/event channel,
-; not the RPC ack (ma-spec sec 8).
-(define (my-hold)
-  (guard (e (#t "")) (#.my.ctx.hold)))
-
-(define (my-hold-pending)
-  (guard (e (#t "")) (#.my.ctx.hold-pending)))
-
-(define (my-hold-confirming)
-  (guard (e (#t "")) (#.my.ctx.hold-confirming)))
-
-(define (my-hold-queued)
-  (guard (e (#t "")) (#.my.ctx.hold-queued)))
-
-(define (clear-queued-hold!)
-  (#.my.ctx.hold-queued:)
-  (#.my.ctx.hold-queued-then:))
-
-(define (clear-hold-pending!)
-  (#.my.ctx.hold-pending:)
-  (#.my.ctx.hold-confirming:)
-  (#.my.ctx.hold-then:))
-
-; `:parent` is an unsolicited actor event. Zion only delivers the typed ctx;
-; avatar policy decides whether to confirm, sequence a follow-up move, or
-; clear the hand. The second parent announcement after :child proves that the
-; actor committed this bare DID as parent before :set-parent is sent.
+;; ── Parent/child transfer handshake ─────────────────────────────────────────
+;; The actor ctx is the only transfer state. No local hold slot or queue is
+;; maintained here.
 (define (handle-avatar-parent! ctx)
-  (let ((actor (map-ref ctx "actor" ""))
-        (parent (map-ref ctx "parent" ""))
-        (pending (my-hold-pending))
-        (confirming (my-hold-confirming))
-        (held (my-hold))
-        (then (guard (e (#t "")) (#.my.ctx.hold-then)))
-        (queued (my-hold-queued))
-        (queued-then (guard (e (#t "")) (#.my.ctx.hold-queued-then)))
+  (let ((parent (map-ref ctx "parent" ""))
         (self (#.my.identity.did)))
-    (cond ((and (not (equal? pending ""))
-                (equal? pending actor)
-                (not (equal? confirming actor))
-                (equal? parent self))
-           (begin
-             (#.my.ctx.hold-confirming: actor)
-             (actor-call actor "child" ctx)))
-          ((and (equal? confirming actor) (equal? parent self))
-           (begin
-             (#.my.ctx.hold: actor)
-             (clear-hold-pending!)
-             (if (equal? then "") nil (actor-call actor "set-parent" then))))
-          ((and (equal? held actor) (not (equal? parent self)))
-           (begin
-             (#.my.ctx.hold:)
-             (clear-queued-hold!)
-             (if (equal? queued "")
-                 nil
-                 (begin
-                   (#.my.ctx.hold-pending: queued)
-                   (if (equal? queued-then "")
-                       (#.my.ctx.hold-then:)
-                       (#.my.ctx.hold-then: queued-then))
-                   (actor-call queued "hold")))))
-          (else nil))))
+    (when (equal? parent self)
+      (actor-call (map-ref ctx "actor" "") "child" ctx))))
 
-(define (queue-hold-after-stow! held target then)
-  (#.my.ctx.hold-queued: target)
-  (if then (#.my.ctx.hold-queued-then: then) (#.my.ctx.hold-queued-then:))
-  ; The avatar is the held item's current parent, so it may stow that item
-  ; in its ordinary inventory. Zion waits for the authoritative departure
-  ; notice before it starts the queued :hold request.
-  (guard (e (#t (begin
-                  (clear-queued-hold!)
-                  (error e))))
-    (actor-call held "set-parent" (my-inv)))
-  nil)
-
-(define (hold-target! target then)
-  (let ((held (my-hold)))
-    (cond ((not (equal? (my-hold-pending) ""))
-         (error (string-append "already reaching for " (my-hold-pending) ".")))
-        ((not (equal? (my-hold-queued) ""))
-         (error (string-append "already stowing for " (my-hold-queued) ".")))
-        ((not (equal? held ""))
-         (queue-hold-after-stow! held target then))
-        (else
-         (begin
-           (#.my.ctx.hold-pending: target)
-           (if then (#.my.ctx.hold-then: then) (#.my.ctx.hold-then:))
-           ; If the item refuses the :hold request outright (no ownership/
-           ; ctx authority, or a same-room mismatch), that refusal is this
-           ; call's own RPC reply, not a later message — clear the slot back
-           ; out and re-raise, or hold-pending would stay stuck forever.
-           (guard (e (#t (begin
-                           (#.my.ctx.hold-pending:)
-                           (#.my.ctx.hold-then:)
-                           (error e))))
-             (actor-call target "hold"))
-           nil)))))
-
-; The entry remembered at hold/take time, so drop can later resolve a name
-; against the hand even before an item has landed in the room/inventory
-; snapshot again. Cleared once the hand empties.
-(define held-entry #f)
-
-(define (remember-held! entry)
-  (set! held-entry (if (map? entry) entry #f))
-  entry)
+(define (hold-target! target)
+  (actor-call target "hold"))
 
 (define (hold name)
   (let ((entry (resolve-one-entry name (default-pool))))
-    (hold-target! (entry-actor entry) #f)
-    (remember-held! entry)
+    (hold-target! (entry-actor entry))
     nil))
 
-; take = hold, then relay straight into your own inventory once the hold is
-; actually confirmed (see the `hold-then` follow-up in inbox_poll.rs). Unlike
-; hold, it only resolves items present in the room, never your inventory.
-(define (take name)
-  (let ((entry (resolve-one-entry name (resolve-room-pool))))
-    (hold-target! (entry-actor entry) (my-inv))
-    (remember-held! entry)
-    nil))
+; take takes an item into the hand. Unlike hold, the form without `from` only
+; resolves items present in the room, never your inventory. `from` makes the
+; source container explicit and lets both references contain multiple words.
+(define (take . words)
+  (let* ((item-words (words-before-keyword words "from"))
+         (container-words (words-after-keyword words "from")))
+    (if (or (null? item-words)
+            (and container-words (null? container-words)))
+      (error "usage: take <item...> [from <container...>]")
+            (let* ((item (join-words item-words))
+              (target (if container-words
+              (resolve-in-container item (resolve-one (join-words container-words)))
+              (entry-actor (resolve-one-entry item (resolve-room-pool))))))
+         (hold-target! target)
+        nil))))
 
 (define (take-from container name)
-  (hold-target! (resolve-in-container name (resolve-one container)) (my-inv)))
+  (hold-target! (resolve-in-container name (resolve-one container))))
 
-; A synthetic single-entry pool for whatever is currently in the hand — the
-; cached hold/take entry when it's still fresh (same DID as .my.ctx.hold),
-; falling back to a one-off "about" round-trip otherwise so the entry still
-; carries a real name to match against — a fresh login has `.my.ctx.hold`
-; persisted from before but no cached held-entry (that cache is in-memory
-; only), and a bare DID-only entry can never match a typed name at all.
-(define (held-pool)
-  (let ((held (my-hold)))
-    (cond ((equal? held "") ())
-          ((and held-entry (equal? (entry-actor held-entry) held)) (list held-entry))
-          (else (list (make-map "did" held "actor" held "name" (held-label held)))))))
-
-; drop's search space: the hand plus your own inventory — an item doesn't
-; stop being yours to put down just because it hasn't landed in the bag yet.
-(define (drop-pool)
-  (append (held-pool) (resolve-inventory-pool)))
-
-; drop resolves the named item (or, with no name, whatever is in hand) against
-; both the hand and your inventory. The room pre-checks capacity first. An item
-; already in hand can then receive :set-parent directly; an inventory child
-; must first use the ordinary :hold handshake, with the room stored as its
-; hold-then target, because only its current parent may request :set-parent.
+; drop acts only on the item in hand. The room pre-checks capacity first.
 (define (drop . rest)
-  (let* ((held (my-hold))
-         (target (if (null? rest)
-                   (if (equal? held "") (error "you aren't holding anything.") held)
-                   (resolve-in-given-pool (join-words rest) (drop-pool)))))
+  (let ((target (if (null? rest)
+                  (error "drop requires an object reference.")
+                  (resolve-one (join-words rest)))))
     (actor-call (room) "drop")
-    (if (equal? target held)
-      (begin
-        (actor-call target "set-parent" (room))
-        (set! held-entry #f))
-      (hold-target! target (room)))
+    (actor-call target "set-parent" (room))
     nil))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
@@ -464,20 +333,15 @@
   (error "usage: put <item...> in <container...>"))
 
 ; Like forge/tell, `in` is a hard separator so both references may use their
-; human-readable multi-word names. An item already in hand can move directly.
-; Otherwise we temporarily hold it, then Zion relays :set-parent to the
-; container after confirming the item as our child.
+; human-readable multi-word names. Resolution is based on the current ctx.
 (define (put . words)
   (let ((item-words (words-before-keyword words "in"))
         (container-words (words-after-keyword words "in")))
     (if (or (null? item-words) (not container-words) (null? container-words))
       (put-usage-error)
-      (let* ((entry (resolve-one-entry (join-words item-words) (default-pool)))
-             (item (entry-actor entry))
+      (let* ((item (resolve-one (join-words item-words)))
              (container (resolve-one (join-words container-words))))
-        (if (equal? item (my-hold))
-            (actor-call item "set-parent" container)
-            (hold-target! item container))
+        (actor-call item "set-parent" container)
         nil))))
 
 (define (put-in . words)
@@ -485,6 +349,12 @@
 
 (define (recycle-from container name)
   (command (resolve-in-container name (resolve-one container)) "recycle")
+  nil)
+
+(define (roll-call . words)
+  (if (null? words)
+    (error "usage: roll-call <container>")
+    (display (command (join-words words) "roll-call" "begin")))
   nil)
 
 (define (say . words)
@@ -616,23 +486,10 @@
       (error (string-append "invalid inventory kind: " kind))))
   nil)
 
-; Best label for whatever `my-hold` names: prefer a cached ctx entry's
-; nick/name (room or inventory pool — no round-trip needed), and only fall
-; back to an RPC round-trip for an item held in the hands, parented directly
-; to us, that isn't in either pool yet.
-(define (held-label held)
-  (let ((entry (find-entry-by-actor (append (resolve-room-pool) (resolve-inventory-pool)) held)))
-    (if entry
-      (event-name entry)
-      (guard (e (#t held)) (first-line (actor-call held "about"))))))
-
 (define (inv . rest)
   (if (pair? rest)
     (set-my-inv! (car rest))
-    (let ((held (my-hold))
-          (snapshot (actor-call (my-inv) "look")))
-      (when (not (equal? held ""))
-        (display (string-append "You are holding " (held-label held) ".")))
+    (let ((snapshot (actor-call (my-inv) "look")))
       (if (map? snapshot)
         (event-things (map-ref snapshot "things" ()))
         (display snapshot))
@@ -662,6 +519,7 @@
         "drop                    drop whatever you're holding into the room\n"
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
+        "roll-call <container>       check a container's children\n"
         "inv                     show what you're holding and your own inventory\n"
         "inv <container>         point your inventory at any container\n"
         "say <text>              say something aloud\n"
@@ -690,7 +548,10 @@
 
 (define (look . rest)
   (if (pair? rest)
-    (look-entry (resolve-one-entry (join-words rest) (default-pool)))
+    (let ((entry (resolve-one-entry (join-words rest) (default-pool))))
+      (if (equal? (map-ref entry "kind" "") "container")
+        (display (actor-call (entry-actor entry) "look"))
+        (look-entry entry)))
     (let ((snapshot (remember-room! (room-call "look"))))
       (if (map? snapshot)
         (event-look snapshot)

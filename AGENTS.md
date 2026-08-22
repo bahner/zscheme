@@ -67,6 +67,12 @@ do not duplicate `resolve-one` plus `actor-call` in each command wrapper.
 `look <object>` uses the same room-plus-inventory candidate pool, but renders
 the resolved child ctx locally rather than calling the target actor.
 
+Node data has one authoritative child-ctx collection, `children`, and only
+one. Do not introduce parallel child lists for different kinds, lifecycle or
+state, inventory, occupancy, or presentation. Resolver and presentation views
+must filter or otherwise derive from `children`; duplicating the collection
+creates inconsistent parentage, updates, persistence, and removal behaviour.
+
 `give <object...> to <person...>` is a consent-based ownership offer. The
 object resolves through the ordinary room-plus-inventory pool to a DID-URL;
 the recipient resolves only through the room's `who` entries to a different
