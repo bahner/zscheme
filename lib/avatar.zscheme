@@ -67,17 +67,30 @@
 (define (no-match-error word)
   (error (string-append "no match for \"" word "\" here.")))
 
-; One candidate pool for every child visible in a room snapshot. Command
-; boundaries resolve exactly one entry from this pool or report ambiguity.
+; A room publishes one authoritative child list. Every resolver and
+; presentation view derives from it rather than maintaining kind-specific
+; copies that can diverge.
 (define (room-child-pool room)
-  (append (event-list-values (map-ref room "who" ()))
-    (append (event-list-values (map-ref room "agents" ()))
-      (append (event-list-values (map-ref room "things" ()))
-        (event-list-values (map-ref room "exits" ()))))))
+  (event-list-values (map-ref room "children" ())))
 
-(define (person-pool room) (event-list-values (map-ref room "who" ())))
+(define (room-child-kind-pool room kind)
+  (filter (lambda (entry) (equal? (map-ref entry "kind" "") kind))
+          (room-child-pool room)))
 
-(define (exit-pool room) (event-list-values (map-ref room "exits" ())))
+(define (person-pool room)
+  (filter (lambda (entry)
+            (let ((actor (entry-actor entry)))
+              (and (starts-with-did? actor) (not (string-contains actor "#")))))
+          (room-child-pool room)))
+
+(define (occupant-pool room) (room-child-kind-pool room "agent"))
+
+(define (thing-pool room)
+  (filter (lambda (entry)
+            (member? (map-ref entry "kind" "") (list "thing" "container")))
+          (room-child-pool room)))
+
+(define (exit-pool room) (room-child-kind-pool room "exit"))
 
 ; Cheap first (search what we already have cached), fresh only if needed:
 ; one `look` round-trip at most per resolve, never one per candidate.
@@ -110,13 +123,11 @@
     pool1))
 
 (define (resolve-inventory-pool)
-  (let ((inv (my-inv-if-any)))
-    (if inv (container-contents inv) ())))
+  (let ((inv (usable-inventory)))
+    (if inv (guard (e (#t ())) (container-contents inv)) ())))
 
 ; The default candidate pool for a bare name: every child in the room plus
-; everything already in your own inventory, assembled as one plain list before
-; any searching happens — resolve-ref (runtime.zscheme) only ever searches a
-; list it's handed, it never fetches one itself.
+; everything in the configured inventory container.
 (define (default-pool)
   (append (resolve-room-pool) (resolve-inventory-pool)))
 
@@ -133,17 +144,31 @@
               ((null? (cdr hits)) (candidate-for-did pool (car hits)))
               (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits))))))))
 
+; Membership events maintain `last-room` directly and topology events replace
+; it from `look`, but a client can still miss an event while disconnected.
+; Every default-pool/room-pool-based resolver therefore retries once against a
+; fresh room before reporting no-match.
+(define (resolve-one-entry-fresh word pool-thunk)
+  (guard (e ((string-contains e "no match for")
+             (remember-room! (room-call "look"))
+             (resolve-one-entry word (pool-thunk)))
+            (#t (error e)))
+    (resolve-one-entry word (pool-thunk))))
+
 (define (resolve-one word)
-  ;; Most verbs want exactly one actor, so this is their common command-boundary
-  ;; conversion from a human word to a wire-ready DID/DID-URL.
-  (entry-actor (resolve-one-entry word (default-pool))))
+  (if (starts-with-did? word)
+    word
+    (entry-actor (resolve-one-entry-fresh word default-pool))))
 
 (define (bare-did? value)
   (and (starts-with-did? value) (not (string-contains value "#"))))
 
+(define (resolve-person-pool)
+  (let ((room1 (if (map? last-room) last-room (remember-room! (room-call "look")))))
+    (if (map? room1) (person-pool room1) ())))
+
 (define (resolve-person word)
-  (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
-         (entry (resolve-one-entry word (if (map? room1) (person-pool room1) ())))
+  (let* ((entry (resolve-one-entry-fresh word resolve-person-pool))
          (did (entry-actor entry)))
     (cond ((not (bare-did? did))
            (error (string-append "\"" word "\" is not a person.")))
@@ -198,21 +223,18 @@
         (#.my.ctx.nick:))))
   ctx)
 
-; A bare DID has no actor of its own to hold carried things under, so it
-; needs one concrete container to serve as that home — forged once as an
-; orphan of this runtime's root (ma-spec sec 6) and remembered locally from
-; then on. `.my.ctx.inv` is per-runtime; root itself is derived by `(root)`.
-(define (create-my-inv!)
-  (let ((created (actor-call (root) "forge" (make-map "kind" "/ma/container/0.0.1" "name" "inventory"))))
-    (#.my.ctx.inv: created)
-    created))
-
+; A direct `my-inv` request may establish the first inventory container under
+; the runtime root. Resolver paths use `my-inv-if-any` so ordinary object
+; handling never creates inventory as a side effect.
 (define (my-inv)
-  (guard (e (#t (create-my-inv!)))
-    (let ((existing (#.my.ctx.inv)))
-      (if (and (string? existing) (not (equal? existing "")))
-        existing
-        (create-my-inv!)))))
+  (let ((existing (guard (e (#t "")) (#.my.ctx.inv))))
+    (if (and (string? existing) (not (equal? existing "")))
+      existing
+      (let ((created (actor-call (root) "forge"
+                                 (make-map "kind" "/ma/container/0.0.1"
+                                           "name" "inventory"))))
+        (#.my.ctx.inv: created)
+        created))))
 
 ; Read-only counterpart of `my-inv` — never forges — so a mere name lookup
 ; (e.g. resolve-name's inventory fallback) can't have the side effect of
@@ -223,6 +245,18 @@
       (if (and (string? existing) (not (equal? existing "")))
         existing
         #f))))
+
+; A configured inventory is usable only while its actor remains a container.
+; Commands call this at their routing boundary, so stale local state falls back
+; to ordinary hand behaviour instead of becoming a hidden transfer target.
+(define (usable-inventory)
+  (let ((inventory (my-inv-if-any)))
+    (if inventory
+      (guard (e (#t #f))
+        (if (equal? (actor-call inventory "kind?") "/ma/container/0.0.1")
+          inventory
+          #f))
+      #f)))
 
       ;; ── World-building and movement verbs ──────────────────────────────────────
       ;;
@@ -271,7 +305,7 @@
         (if (or (null? name-words) (and target-words (null? target-words)))
             (forge-usage-error)
             (let ((name (join-words name-words))
-                  (target (if (pair? target-words) (join-words target-words) (my-inv))))
+                  (target (if (pair? target-words) (join-words target-words) (or (my-inv-if-any) (room)))))
               (display (command target "forge" (make-map "kind" kind "name" name)))
               nil)))))
 
@@ -286,6 +320,7 @@
 ;; ── Parent/child transfer handshake ─────────────────────────────────────────
 ;; The actor ctx is the only transfer state. No local hold slot or queue is
 ;; maintained here.
+
 (define (handle-avatar-parent! ctx)
   (let ((parent (map-ref ctx "parent" ""))
         (self (#.my.identity.did)))
@@ -299,13 +334,13 @@
   (actor-call target "hold"))
 
 (define (hold name)
-  (let ((entry (resolve-one-entry name (default-pool))))
+  (let ((entry (resolve-one-entry-fresh name default-pool)))
     (hold-target! (entry-actor entry))
     nil))
 
-; take takes an item into the hand. Unlike hold, the form without `from` only
-; resolves items present in the room, never your inventory. `from` makes the
-; source container explicit and lets both references contain multiple words.
+; Take without `from` sends the ownership-blind :hold trigger directly to a
+; room child. Taking from a container uses the container's lock/contents gate;
+; root then asks the item to propose itself to this avatar.
 (define (take . words)
   (let* ((item-words (words-before-keyword words "from"))
          (container-words (words-after-keyword words "from")))
@@ -318,18 +353,25 @@
                (id (actor-call container "take" item)))
           (when (string? id) (pending-store! id))
           nil)
-        (let ((target (entry-actor (resolve-one-entry (join-words item-words) (resolve-room-pool)))))
-          (hold-target! target)
+        (let ((entry (resolve-one-entry-fresh (join-words item-words) resolve-room-pool)))
+          (hold-target! (entry-actor entry))
           nil)))))
 
 (define (take-from container name)
-  (hold-target! (resolve-in-container name (resolve-one container))))
+  (let* ((source (resolve-one container))
+         (item (resolve-in-container name source))
+         (id (actor-call source "take" item)))
+    (when (string? id) (pending-store! id))
+    nil))
 
 (define (drop . rest)
-  (let ((target (resolve-one (join-words rest))))
-    (actor-call (room) "drop" target)
-    (actor-call target "set-parent" (room))
-    nil))
+  (if (null? rest)
+    (error "usage: drop <item...>")
+    (begin
+      (let ((target (resolve-one (join-words rest))))
+        (actor-call (room) "drop" target)
+        (actor-call target "set-parent" (room)))
+      nil)))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
@@ -345,17 +387,18 @@
   (set! pending-actions (map-delete pending-actions id)))
 
 ; Like forge/tell, `in` is a hard separator so both references may use their
-; human-readable multi-word names. Resolution is based on the current ctx.
+; human-readable multi-word names. The item itself initiates the put request;
+; actor authority and container admission remain runtime decisions.
 (define (put . words)
   (let ((item-words (words-before-keyword words "in"))
         (container-words (words-after-keyword words "in")))
     (if (or (null? item-words) (not container-words) (null? container-words))
       (put-usage-error)
-      (let* ((item (resolve-one (join-words item-words)))
-             (container (resolve-one (join-words container-words)))
-             ; Item initiates put: it validates auth, builds put-ctx, asks root.
-             (id (actor-call item "put" container)))
-        (when (string? id) (pending-store! id))
+      (let* ((item-entry (resolve-one-entry-fresh (join-words item-words) default-pool))
+             (item (entry-actor item-entry))
+             (container (resolve-one (join-words container-words))))
+        (let ((id (actor-call item "put" container)))
+          (when (string? id) (pending-store! id)))
         nil))))
 
 (define (put-in . words)
@@ -407,7 +450,7 @@
     (if (or (null? object-words) (not person-words) (null? person-words))
       (give-usage-error)
       (let* ((object-text (join-words object-words))
-             (object-entry (resolve-one-entry object-text (default-pool)))
+             (object-entry (resolve-one-entry-fresh object-text default-pool))
              (object (entry-actor object-entry))
              (recipient (resolve-person (join-words person-words))))
         (if (or (bare-did? object) (not (starts-with-did? object)))
@@ -513,25 +556,27 @@
   nil)
 
 ; An inventory is nothing but an ordinary container you point yourself at —
-; any container works, not just an auto-forged one, so pointing elsewhere is
-; just a setter, not a special operation. `:kind?` guards against pointing it
-; at a room, thing, or agent by mistake.
+; any container works. `:kind?` guards against pointing it at a room, thing,
+; or agent by mistake. Accepts a name or a bare DID-URL.
 (define (set-my-inv! container)
-  (let ((kind (actor-call container "kind?")))
+  (let* ((did (if (starts-with-did? container) container (resolve-one container)))
+         (kind (actor-call did "kind?")))
     (if (equal? kind "/ma/container/0.0.1")
       (begin
-        (#.my.ctx.inv: container)
-        (display (string-append "inventory set to " container)))
+        (let ((old (my-inv-if-any)))
+          (when old
+            (actor-call (room) "drop" old)
+            (actor-call old "set-parent" (room))))
+        (#.my.ctx.inv: did)
+        (display (string-append "inventory set to " did)))
       (error (string-append "invalid inventory kind: " kind))))
   nil)
 
 (define (inv . rest)
   (if (pair? rest)
     (set-my-inv! (car rest))
-    (let ((snapshot (actor-call (my-inv) "look")))
-      (if (map? snapshot)
-        (event-things (map-ref snapshot "things" ()))
-        (display snapshot))
+    (begin
+      (event-things (container-contents (my-inv)))
       nil)))
 
 ; `help` with no argument shows the avatar's own command list; `help <name>`
@@ -552,10 +597,11 @@
         "things?                 list things here\n"
         "exits?                  list exits here\n"
         "here?                   show the current room's address\n"
-        "hold <name>             hold something (room or your own inventory), empty-handed\n"
-        "take <name>             hold something from the room into your inventory\n"
-        "take-from <container> <name>  hold something out of a container into your inventory\n"
-        "drop                    drop whatever you're holding into the room\n"
+        "hold <name>             move something here into your inventory\n"
+        "take <name>             move something here into your inventory\n"
+        "take <name> from <container>  take something out of a container\n"
+        "take-from <container> <name>  take something out of a container\n"
+        "drop <item>             drop an inventory item into the room\n"
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
         "roll-call <container>       check a container's children\n"
@@ -594,7 +640,7 @@
 
 (define (look . rest)
   (if (pair? rest)
-    (let ((entry (resolve-one-entry (join-words rest) (default-pool))))
+    (let ((entry (resolve-one-entry-fresh (join-words rest) default-pool)))
       (if (equal? (map-ref entry "kind" "") "container")
         (display (actor-call (entry-actor entry) "look"))
         (look-entry entry)))

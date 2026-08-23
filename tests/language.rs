@@ -132,10 +132,13 @@ fn production_events_render_humans_and_agents_as_occupants() {
 
                 (event-look
                     (make-map "name" "Atrium" "description" "Quiet."
-                              "who" (list (make-map "name" "Alice"))
-                              "agents" (list (make-map "name" "Alice")
-                                             (make-map "name" "Attila"))
-                              "exits" (list (make-map "direction" "mirror"))))
+                              "children"
+                              (list (make-map "actor" "did:ma:alice" "kind" "agent"
+                                              "name" "Alice")
+                                    (make-map "actor" "did:ma:world#attila" "kind" "agent"
+                                              "name" "Attila")
+                                    (make-map "actor" "did:ma:world#mirror" "kind" "exit"
+                                              "direction" "mirror"))))
                 "#
     );
 
@@ -144,6 +147,52 @@ fn production_events_render_humans_and_agents_as_occupants() {
         ctx.output.borrow().as_str(),
         "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nExits:\nmirror"
     );
+}
+
+#[test]
+fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (define alice
+                    (make-map "actor" "did:ma:alice" "kind" "agent" "name" "Alice"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing" "name" "Lamp"))
+                (remember-room!
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (list alice)))
+
+                (on-event ":arrive" (list lamp))
+                (on-event ":arrive" (list (map-set lamp "nick" "Brass Lamp")))
+                (assert (= (length (room-child-pool last-room)) 2))
+                (assert (equal?
+                    (map-ref (find-entry-by-actor (room-child-pool last-room)
+                                                  "did:ma:world#lamp")
+                             "nick" "")
+                    "Brass Lamp"))
+
+                (on-event ":leave" (list lamp))
+                (on-event ":leave" (list lamp))
+                (assert (equal? (map entry-actor (room-child-pool last-room))
+                                (list "did:ma:alice")))
+
+                (remember-room!
+                    (make-map "actor" "did:ma:world#room" "name" "Fresh"
+                              "children" (list lamp)))
+                (assert (equal? (map entry-actor (room-child-pool last-room))
+                                (list "did:ma:world#lamp")))
+                "room-event-cache-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "room-event-cache-ok");
 }
 
 fn eval_file(path: &Path) -> Result<SchemeVal, SchemeErr> {
@@ -284,14 +333,17 @@ fn production_avatar_resolves_exactly_one_exit_actor() {
                 {source}
 
                 (set! last-room
-                    (make-map "exits"
-                        (list (make-map "actor" "did:ma:exit-hull" "direction" "hull"))))
+                    (make-map "children"
+                        (list (make-map "actor" "did:ma:exit-hull" "kind" "exit"
+                                        "direction" "hull"))))
                 (assert (equal? (resolve-exit "hull") "did:ma:exit-hull"))
 
                 (set! last-room
-                    (make-map "exits"
-                        (list (make-map "actor" "did:ma:exit-one" "direction" "east hatch")
-                                    (make-map "actor" "did:ma:exit-two" "direction" "east door"))))
+                    (make-map "children"
+                        (list (make-map "actor" "did:ma:exit-one" "kind" "exit"
+                                        "direction" "east hatch")
+                              (make-map "actor" "did:ma:exit-two" "kind" "exit"
+                                        "direction" "east door"))))
                 (guard (error
                                 ((string-contains error "matches more than one") "avatar-exit-resolver-ok")
                                 (#t (error error)))
@@ -345,16 +397,19 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
                 (#.my.ctx.nick: "tester")
                 (#.my.ctx.inv: "did:ma:world#inventory")
 
-                (define lamp (make-map "actor" "did:ma:world#lamp" "name" "Brass Lamp"))
-                (define box (make-map "actor" "did:ma:world#box" "name" "Wooden Box"))
-                (define coin (make-map "actor" "did:ma:world#coin" "name" "Silver Coin"))
+                (define lamp (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                                       "parent" "did:ma:world#room" "name" "Brass Lamp"))
+                (define box (make-map "actor" "did:ma:world#box" "kind" "container"
+                                      "parent" "did:ma:world#room" "name" "Wooden Box"))
+                (define coin (make-map "actor" "did:ma:world#coin" "kind" "thing"
+                                       "parent" "did:ma:world#inventory" "name" "Silver Coin"))
                 (define hull-exit
-                    (make-map "actor" "did:ma:world#exit-hull" "direction" "hull"))
+                    (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
+                              "parent" "did:ma:world#room" "direction" "hull"))
                 (define room-snapshot
                     (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
                                         "nick" "tester" "name" "Test room" "description" "Ready."
-                                        "who" () "agents" () "things" (list lamp)
-                                        "exits" (list hull-exit)))
+                                        "children" (list lamp hull-exit)))
                 (set! last-room room-snapshot)
 
                 (define actor-calls ())
@@ -370,10 +425,7 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
                                 (equal? method "set-parent")
                                 (not coin-confirmed))
                            (error "set-parent must be requested by current parent"))
-                          ((equal? method "look")
-                                 (if (equal? actor "did:ma:world#inventory")
-                                     (make-map "things" (list coin))
-                                     room-snapshot))
+                          ((equal? method "look") room-snapshot)
                                   ((and (equal? actor "did:ma:world#inventory")
                                       (equal? method "contents?")) (list coin box))
                                   ((and (equal? actor "did:ma:world#box")
@@ -469,7 +521,45 @@ fn production_avatar_commands_accept_representative_arguments() {
 }
 
 #[test]
-fn production_avatar_resolves_a_held_item_without_inventory() {
+fn production_avatar_parent_proposal_is_acknowledged_then_moved_to_inventory() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.inv: "did:ma:world#inventory")
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    ())
+
+                (on-event ":parent"
+                           (list (make-map "actor" "did:ma:world#lamp"
+                                           "parent" "did:ma:me")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#lamp" "child"
+                                (list (make-map "actor" "did:ma:world#lamp"
+                                                "parent" "did:ma:me")))
+                          (list "did:ma:world#lamp" "set-parent"
+                                (list "did:ma:world#inventory")))))
+                "parent-handshake-ok"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "parent-handshake-ok");
+}
+
+#[test]
+fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -481,27 +571,71 @@ fn production_avatar_resolves_a_held_item_without_inventory() {
 
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
-                (define lamp (make-map "actor" "did:ma:world#lamp" "name" "Brass Lamp"))
-                (set! last-room (make-map "actor" "did:ma:world#room"
-                                              "things" ()))
+                (#.my.ctx.inv: "did:ma:world#inventory")
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define coin
+                    (make-map "actor" "did:ma:world#coin" "kind" "thing"
+                              "parent" "did:ma:world#inventory" "name" "Coin"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (list lamp box)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
                 (define (actor-call actor method . args)
-                       (if (equal? method "look")
-                           (if (equal? actor "did:ma:world#lamp")
-                               "Brass Lamp\nA small movable thing."
-                               last-room)
-                           ()))
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#inventory")
+                                (equal? method "kind?"))
+                           "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#inventory")
+                                (equal? method "contents?"))
+                           (list coin))
+                          ((and (equal? actor "did:ma:world#box")
+                                (equal? method "contents?"))
+                           (list coin))
+                          (else ())))
 
-                   (hold "did:ma:world#lamp")
-                (on-event ":parent"
-                           (list (make-map "actor" "did:ma:world#lamp"
-                                           "parent" "did:ma:me")))
-                (assert (equal? (resolve-one "lamp") "did:ma:world#lamp"))
-                "held-item-resolves-without-inventory"
-                "#
+                (set! calls ())
+                (smoke "take" (lambda () (take "Lamp")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#lamp" "hold" ()))))
+
+                (set! calls ())
+                (smoke "take from" (lambda () (take "Coin" "from" "Box")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+
+                (set! calls ())
+                (smoke "take-from" (lambda () (take-from "Box" "Coin")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+
+                (set! calls ())
+                (smoke "put" (lambda () (put "Coin" "in" "Box")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#coin" "put" (list "did:ma:world#box"))))
+
+                (set! calls ())
+                (smoke "drop" (lambda () (drop "Coin")))
+                    (let ((reversed (reverse calls)))
+                    (assert (equal? (car reversed)
+                        (list "did:ma:world#coin" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr reversed)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#coin")))))
+                "transfer-rpcs-ok"
+        "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "held-item-resolves-without-inventory");
+    assert_eq!(value.display(), "transfer-rpcs-ok");
 }
 
 #[test]
@@ -518,35 +652,35 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                 (#.my.ctx.room: "did:ma:world#room")
                 (define direct-attila
                     (make-map "actor" "did:ma:attila" "did" "did:ma:attila"
-                                        "name" "Attila" "nick" "Attila"
+                                        "kind" "agent" "name" "Attila" "nick" "Attila"
                                         "description" "A direct DID presence."))
                 (define agent-attila
                     (make-map "actor" "did:ma:world#attila" "name" "Attila"
                                         "nick" "Attila" "kind" "agent"
                                         "description" "An agent."))
                 (define lamp
-                    (make-map "actor" "did:ma:world#lamp" "name" "Lamp"
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing" "name" "Lamp"
                                         "description" "A lamp."))
                 (define mirror
-                    (make-map "actor" "did:ma:world#mirror" "name" "Mirror"
+                    (make-map "actor" "did:ma:world#mirror" "kind" "exit" "name" "Mirror"
                                         "direction" "mirror" "description" "An exit."))
                 (define inventory-coin
-                    (make-map "actor" "did:ma:world#coin" "name" "Coin"
+                    (make-map "actor" "did:ma:world#coin" "kind" "thing" "name" "Coin"
                                         "description" "An inventory coin."))
                 (define room-duckie
                     (make-map "actor" "did:ma:world#room-duckie"
+                                        "kind" "thing"
                                         "parent" "did:ma:world#room"
                                         "name" "Rubber Duckie" "nick" "Duckie"))
                 (define inventory-duckie
                     (make-map "actor" "did:ma:world#inventory-duckie"
+                                        "kind" "thing"
                                         "parent" "did:ma:world#inventory"
                                         "name" "Rubber Duckie" "nick" "Duckie"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "The Construct"
-                                        "who" (make-map "did:ma:attila" direct-attila)
-                                        "agents" (list agent-attila)
-                                        "things" (list lamp room-duckie)
-                                        "exits" (list mirror)))
+                                        "children" (list direct-attila agent-attila lamp
+                                                         room-duckie mirror)))
                 (#.my.ctx.inv: "did:ma:world#inventory")
 
                 (define (actor-call actor method . params)
@@ -586,8 +720,7 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
 
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "The Construct"
-                                        "who" (make-map "did:ma:attila" direct-attila)
-                                        "agents" () "things" (list lamp) "exits" (list mirror)))
+                                        "children" (list direct-attila lamp mirror)))
                 (look "Coin")
                 "room-child-resolver-ok"
                 "#
@@ -615,17 +748,16 @@ fn production_avatar_give_sends_a_claim_offer_to_one_person() {
                 (#.my.identity.did: "did:ma:bob")
                 (define bob
                     (make-map "did" "did:ma:bob" "actor" "did:ma:bob"
-                              "name" "Bob" "nick" "Bob"))
+                              "kind" "agent" "name" "Bob" "nick" "Bob"))
                 (define alice
                     (make-map "did" "did:ma:alice" "actor" "did:ma:alice"
-                              "name" "Alice" "nick" "Alice"))
+                              "kind" "agent" "name" "Alice" "nick" "Alice"))
                 (define duckie
                     (make-map "actor" "did:ma:world#duckie"
-                              "name" "Rubber Duckie" "nick" "Duckie"))
+                              "kind" "thing" "name" "Rubber Duckie" "nick" "Duckie"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room"
-                              "who" (list bob alice) "agents" ()
-                              "things" (list duckie) "exits" ()))
+                              "children" (list bob alice duckie)))
 
                 (define call-order "")
                 (define called-actor "")

@@ -221,13 +221,13 @@
 (define (member? item lst)
   (cond ((null? lst) #f)
         ((equal? item (car lst)) lst)
-        (else (member item (cdr lst)))))
+  (else (member? item (cdr lst)))))
 
 ;; Stable de-duplication that keeps the last occurrence of each value. Resolver
 ;; callers care about a deterministic answer set, not attribute repetition.
 (define (unique-list lst)
   (cond ((null? lst) ())
-        ((contains? (cdr lst) (car lst)) (unique-list (cdr lst)))
+  ((member? (car lst) (cdr lst)) (unique-list (cdr lst)))
         (else (cons (car lst) (unique-list (cdr lst))))))
 
 ;; ── Text views ────────────────────────────────────────────────────────────────

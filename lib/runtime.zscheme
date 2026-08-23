@@ -85,7 +85,7 @@
          (not (null? needle-words))
          (let ((haystack-words (filter (lambda (w) (not (equal? w "")))
                                        (string-split (string-downcase value) " "))))
-           (fold (lambda (nw acc) (and acc (member nw haystack-words)))
+               (fold (lambda (nw acc) (and acc (member? nw haystack-words)))
                  #t
                  needle-words)))))
 

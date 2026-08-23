@@ -48,9 +48,9 @@
   ;; needs no extra RPC and must not mutate the avatar's cached snapshot.
   (let ((name (map-ref room "name" (event-name room)))
         (description (map-ref room "description" ""))
-      (occupants (map-ref room "agents" '()))
-        (things (map-ref room "things" '()))
-        (exits (map-ref room "exits" '())))
+        (occupants (occupant-pool room))
+        (things (thing-pool room))
+        (exits (exit-pool room)))
     (display
       (string-append
         name
@@ -71,10 +71,31 @@
 (define (event-things things)
   (display (string-append "Things:" (event-list-lines "" things event-name))))
 
+(define (room-child-upsert! ctx)
+  (when (and (map? last-room) (map? ctx))
+    (let ((actor (entry-actor ctx)))
+      (when actor
+        (set! last-room
+          (map-set last-room "children"
+            (cons ctx
+                  (filter (lambda (child) (not (equal? (entry-actor child) actor)))
+                          (room-child-pool last-room)))))))))
+
+(define (room-child-remove! ctx)
+  (when (and (map? last-room) (map? ctx))
+    (let ((actor (entry-actor ctx)))
+      (when actor
+        (set! last-room
+          (map-set last-room "children"
+            (filter (lambda (child) (not (equal? (entry-actor child) actor)))
+                    (room-child-pool last-room))))))))
+
 (define (event-arrive ctx)
+  (room-child-upsert! ctx)
   (display (string-append (event-name ctx) " arrives.")))
 
 (define (event-leave ctx)
+  (room-child-remove! ctx)
   (display (string-append (event-name ctx) " leaves.")))
 
 (define (event-say ctx text)
@@ -82,12 +103,6 @@
 
 (define (event-emote ctx text)
   (display (string-append (event-name ctx) " " text)))
-
-(define (event-take ctx)
-  (display (string-append (event-name ctx) " takes something.")))
-
-(define (event-drop ctx)
-  (display (string-append (event-name ctx) " drops something.")))
 
 ; Personal completion events — clear pending entry, display failure if any.
 (define (event-action-done action-ctx)
@@ -99,12 +114,15 @@
 
 (define event-put event-action-done)
 (define event-take-done event-action-done)
-(define event-drop-done event-action-done)
 
 (define (event-dig ctx direction)
+  (guard (e (#t #f))
+    (remember-room! (room-call "look")))
   (display (string-append (event-name ctx) " digs " direction ".")))
 
 (define (event-fill ctx direction)
+  (guard (e (#t #f))
+    (remember-room! (room-call "look")))
   (display (string-append (event-name ctx) " fills " direction ".")))
 
 (define (event-parent ctx)
@@ -113,8 +131,8 @@
 ;; ── Data-directed event dispatch ────────────────────────────────────────────
 ;;
 ;; Adding a presentation-only event means defining one procedure and adding one
-;; map entry. Events that change room membership/reachability must also join the
-;; invalidation list below.
+;; map entry. Membership events update cached children directly; topology
+;; events replace the cache with a complete room snapshot.
 
 (define event-handlers
   (make-map ":print" event-print
@@ -122,31 +140,14 @@
             ":leave" event-leave
             ":say" event-say
             ":emote" event-emote
-            ":take" event-take
-            ":drop" event-drop
             ":dig" event-dig
             ":fill" event-fill
             ":parent" event-parent
-            ":ctx" event-room-ctx
             ":put-event" event-put
-            ":take-event" event-take-done
-            ":drop-event" event-drop-done))
-
-; Any broadcast that can change who/what is present or reachable in this
-; room — someone else arriving/leaving/taking/dropping/digging/filling —
-; makes the cached `last-room` snapshot (avatar.zscheme) stale. Without this,
-; resolve-room-pool keeps serving the old who/things/exits list forever (it
-; only ever refreshes on a cache miss or an explicit `look`), so hold/take/
-; drop/put/claim/owner/recycle can match a ghost that has since left, or miss
-; someone who just arrived — the intermittent "sometimes 2 duckies, sometimes
-; none" symptom.
-(define room-invalidating-events
-  (list ":arrive" ":leave" ":take" ":drop" ":dig" ":fill" ":put-event"))
+            ":take-event" event-take-done))
 
 (define (on-event event args)
   ;; Unknown events are ignored: this client may be older than the actor that
   ;; sent them. Known handlers receive the event's argument list via `apply`.
-  (when (contains? room-invalidating-events event)
-    (set! last-room #f))
   (let ((handler (map-ref event-handlers event #f)))
     (if handler (apply handler args) ())))
