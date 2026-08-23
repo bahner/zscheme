@@ -469,6 +469,42 @@ fn production_avatar_commands_accept_representative_arguments() {
 }
 
 #[test]
+fn production_avatar_resolves_a_held_item_without_inventory() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define lamp (make-map "actor" "did:ma:world#lamp" "name" "Brass Lamp"))
+                (set! last-room (make-map "actor" "did:ma:world#room"
+                                              "things" ()))
+                (define (actor-call actor method . args)
+                       (if (equal? method "look")
+                           (if (equal? actor "did:ma:world#lamp")
+                               "Brass Lamp\nA small movable thing."
+                               last-room)
+                           ()))
+
+                   (hold "did:ma:world#lamp")
+                (on-event ":parent"
+                           (list (make-map "actor" "did:ma:world#lamp"
+                                           "parent" "did:ma:me")))
+                (assert (equal? (resolve-one "lamp") "did:ma:world#lamp"))
+                "held-item-resolves-without-inventory"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "held-item-resolves-without-inventory");
+}
+
+#[test]
 fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
