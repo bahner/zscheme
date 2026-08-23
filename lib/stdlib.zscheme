@@ -218,13 +218,10 @@
       lst
       (drop (- n 1) (cdr lst))))
 
-(define (member item lst)
+(define (member? item lst)
   (cond ((null? lst) #f)
         ((equal? item (car lst)) lst)
         (else (member item (cdr lst)))))
-
-(define (contains? lst item)
-  (not (equal? (member item lst) #f)))
 
 ;; Stable de-duplication that keeps the last occurrence of each value. Resolver
 ;; callers care about a deterministic answer set, not attribute repetition.
