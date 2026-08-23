@@ -110,28 +110,6 @@
 (define (event-parent ctx)
   (handle-avatar-parent! ctx))
 
-; Extract a value from a direct-room-ctx alist, i.e. ((":kind" "agent") (":room" "did:…") …).
-(define (ctx-alist-ref alist key default)
-  (let loop ((rest alist))
-    (cond ((null? rest) default)
-          ((and (pair? (car rest)) (equal? (car (car rest)) key))
-           (car (cdr (car rest))))
-          (else (loop (cdr rest))))))
-
-; Handle the room-pushed ":ctx" event that follows a server-initiated entry
-; (e.g. after a successful dig). Update room/nick config and show the new room.
-(define (event-room-ctx alist)
-  (let ((room (ctx-alist-ref alist ":room" #f))
-        (nick (ctx-alist-ref alist ":nick" #f)))
-    (when (string? room)
-      (#.my.ctx.room: room)
-      (when (string? nick)
-        (if (equal? nick "")
-          (#.my.ctx.nick:)
-          (#.my.ctx.nick: nick)))
-      (set! last-room #f)
-      (look))))
-
 ;; ── Data-directed event dispatch ────────────────────────────────────────────
 ;;
 ;; Adding a presentation-only event means defining one procedure and adding one

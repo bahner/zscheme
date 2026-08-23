@@ -515,6 +515,7 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
         r#"
                 {source}
 
+                (#.my.ctx.room: "did:ma:world#room")
                 (define direct-attila
                     (make-map "actor" "did:ma:attila" "did" "did:ma:attila"
                                         "name" "Attila" "nick" "Attila"
@@ -549,10 +550,13 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                 (#.my.ctx.inv: "did:ma:world#inventory")
 
                 (define (actor-call actor method . params)
-                    (if (and (equal? actor "did:ma:world#inventory")
-                             (equal? method "contents?"))
-                        (list inventory-coin inventory-duckie)
-                        actor))
+                    (cond ((and (equal? actor "did:ma:world#inventory")
+                              (equal? method "kind?"))
+                          "/ma/container/0.0.1")
+                         ((and (equal? actor "did:ma:world#inventory")
+                              (equal? method "contents?"))
+                          (list inventory-coin inventory-duckie))
+                         (else actor)))
 
                 (assert (equal? (command "Lamp" "probe") "did:ma:world#lamp"))
                 (assert (equal? (command "Mirror" "probe") "did:ma:world#mirror"))
