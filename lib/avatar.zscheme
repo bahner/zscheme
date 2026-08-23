@@ -181,8 +181,8 @@
             (else (ambiguous-error word candidates))))))
 
 ;; ── Entry and local context ─────────────────────────────────────────────────
-; `:enter`/`:traverse` replies carry the new room ctx; nothing else updates
-; `.my.ctx.room`/`.my.ctx.nick` for a Scheme-driven enter, so we must.
+; `:enter`/`:traverse` replies carry the new room ctx. Store its parent and
+; nick locally; the actor tree is updated by the parent/child handshake.
 
 ; `(#.my.path: value)` is the local config *setter* (trailing colon on the
 ; path atom); `(#.my.path:)` with no value is the *delete* form — used below
@@ -191,12 +191,7 @@
   (when (map? ctx)
     (let ((parent (map-ref ctx "parent" #f)))
       (when parent
-        (#.my.ctx.room: parent)
-        ; register avatar location with root so it can validate spatial actions
-        (actor-call (root) "ctx-update"
-                    (make-map "actor" (#.my.identity.did)
-                              "kind" "agent"
-                              "parent" parent))))
+        (#.my.ctx.room: parent)))
     (let ((nick (map-ref ctx "nick" #f)))
       (if (and (string? nick) (not (equal? nick "")))
         (#.my.ctx.nick: nick)
