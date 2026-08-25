@@ -243,6 +243,35 @@
         (#.my.ctx.nick:))))
   ctx)
 
+; Reading an unset local path raises, so every optional profile field needs a
+; fallback rather than a bare get.
+(define (local-string thunk fallback)
+  (let ((value (guard (e (#t #f)) (thunk))))
+    (if (and (string? value) (not (equal? value ""))) value fallback)))
+
+; This avatar's own child ctx, in the shape every node reports to its parent.
+; A bare DID has no identity actor, so the client assembles it here.
+(define (my-node-ctx)
+  (let* ((did (#.my.identity.did))
+         (name (local-string (lambda () (#.my.profile.name)) did))
+         (nick (local-string (lambda () (#.my.ctx.nick)) name)))
+    (make-map "actor" did
+              "did" did
+              "parent" (room)
+              "kind" "agent"
+              "protocol" "/ma/agent/0.0.1"
+              "name" name
+              "nick" nick
+              "description" (local-string (lambda () (#.my.profile.description))
+                                          "A direct DID presence."))))
+
+; A roll-call is the parent recounting its children. Answer it the way every
+; other node does: reannounce to our own cached parent, ignoring the caller.
+(define (announce-avatar-parent!)
+  (when (starts-with-did? (guard (e (#t #f)) (room)))
+    (actor-call (room) "parent" (my-node-ctx)))
+  nil)
+
 ; A direct `my-inv` request may establish the first inventory container under
 ; the runtime root. Resolver paths use `my-inv-if-any` so ordinary object
 ; handling never creates inventory as a side effect.
@@ -398,6 +427,31 @@
               (hold-target! (entry-actor entry))
               nil)))))))
 
+; A cheat: locate an object by its bare DID even though it never surfaces in
+; `look`/`inv` (e.g. it isn't a child of the current room or your inventory
+; the resolver already searches). Only takes it if it's actually within reach
+; right now — the room, you, or your inventory — never anywhere else.
+(define (find did)
+  (if (not (starts-with-did? did))
+    (error "usage: find <did>")
+    (with-action-context (string-append "could not find " did)
+      (lambda ()
+        (let ((parent (actor-call did "parent?")))
+          (if (or (equal? parent (room))
+                  (equal? parent (#.my.identity.did))
+                  (and (my-inv-if-any) (equal? parent (my-inv-if-any))))
+            (begin
+              (when held-item
+                (let ((current (entry-actor held-item)))
+                  (actor-call (room) "drop" current)
+                  (actor-call current "set-parent" (room))
+                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
+                  (held-clear!)))
+              (hold-target! did)
+              (display (string-append "You found " (actor-call did "name") "."))
+              nil)
+            (error "it's not here")))))))
+
 (define (take-from container name)
   (with-action-context
     (string-append "could not take " name " from " container)
@@ -484,10 +538,33 @@
       (command (resolve-in-container name (resolve-one container)) "recycle")
       nil)))
 
+; A roll-call is node policy; this is only the human spelling of it. The phase
+; and its optional timeout are peeled off the END so a multi-word object needs
+; no quoting, exactly like forge's named/in split. No object means this room.
+(define (roll-call-seconds? word)
+  (or (number? word)
+      (and (string? word) (string->number word))))
+
+(define (roll-call-split words)
+  (let* ((n (length words))
+         (last1 (if (> n 0) (list-ref words (- n 1)) #f))
+         (last2 (if (> n 1) (list-ref words (- n 2)) #f)))
+    (cond ((equal? last1 "end")
+           (list (take (- n 1) words) (list "end")))
+          ((and (roll-call-seconds? last1) (equal? last2 "begin"))
+           (list (take (- n 2) words) (list "begin" last1)))
+          ((equal? last1 "begin")
+           (list (take (- n 1) words) (list "begin")))
+          (else (list words (list "begin"))))))
+
 (define (roll-call . words)
-  (if (null? words)
-    (error "usage: roll-call <container>")
-    (display (command (join-words words) "roll-call" "begin")))
+  (let* ((parts (roll-call-split words))
+         (object-words (car parts))
+         (phase-args (car (cdr parts))))
+    (display
+      (if (null? object-words)
+        (apply room-call "roll-call" phase-args)
+        (apply command (join-words object-words) "roll-call" phase-args))))
   nil)
 
 (define (say . words)
@@ -674,11 +751,12 @@
         "take <name>             pick up something here (drops current held item first)\n"
         "take <name> from <container>  take something out of a container\n"
         "take-from <container> <name>  take something out of a container\n"
+        "find <did>              take a hidden object by DID if it's here, on you, or in your inventory\n"
         "drop                    drop what you're holding\n"
         "drop <item>             drop by name (error if you're not holding it)\n"
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
-        "roll-call <container>       check a container's children\n"
+        "roll-call [<target...>] [begin [secs]|end]  recount a node's children\n"
         "inv                     show what you're holding and your own inventory\n"
         "inv <container>         point your inventory at any container\n"
         "prop <target> <key> [value...]  set a named prop on any actor\n"

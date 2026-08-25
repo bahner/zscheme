@@ -638,6 +638,54 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
 }
 
 #[test]
+fn production_find_takes_a_hidden_object_only_when_within_reach() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.inv: "did:ma:world#inventory")
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#duckie") (equal? method "parent?"))
+                           "did:ma:world#room")
+                          ((and (equal? actor "did:ma:world#duckie") (equal? method "name"))
+                           "Duckie")
+                          ((and (equal? actor "did:ma:world#ghost") (equal? method "parent?"))
+                           "did:ma:world#elsewhere")
+                          (else ())))
+
+                (set! calls ())
+                (smoke "find" (lambda () (find "did:ma:world#duckie")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#duckie" "parent?" ())
+                          (list "did:ma:world#duckie" "hold" ())
+                          (list "did:ma:world#duckie" "name" ()))))
+
+                (set! calls ())
+                (define found-elsewhere?
+                    (guard (failure (#t #t)) (find "did:ma:world#ghost") #f))
+                (assert found-elsewhere?)
+                "find-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "find-ok");
+    assert_eq!(ctx.output.borrow().as_str(), "You found Duckie.");
+}
+
+#[test]
 fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()

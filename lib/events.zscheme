@@ -125,6 +125,9 @@
 (define (event-parent ctx)
   (handle-avatar-parent! ctx))
 
+(define (event-roll-call-child . args)
+  (announce-avatar-parent!))
+
 ;; ── Data-directed event dispatch ────────────────────────────────────────────
 ;;
 ;; Adding a presentation-only event means defining one procedure and adding one
@@ -140,11 +143,16 @@
             ":dig" event-dig
             ":fill" event-fill
             ":parent" event-parent
+            ":roll-call-child" event-roll-call-child
             ":put-event" event-put
             ":take-event" event-take-done))
 
 (define (on-event event args)
-  ;; Unknown events are ignored: this client may be older than the actor that
-  ;; sent them. Known handlers receive the event's argument list via `apply`.
+  ;; The host forwards every unsolicited verb; selecting and validating them is
+  ;; this layer's job. Unknown events are ignored (the sender may be newer than
+  ;; this client) and a malformed payload must not break the event loop.
   (let ((handler (map-ref event-handlers event #f)))
-    (if handler (apply handler args) ())))
+    (if handler
+      (guard (e (#t (display (string-append "event " event ": " e)) ()))
+        (apply handler args))
+      ())))
