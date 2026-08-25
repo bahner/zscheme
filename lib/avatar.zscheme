@@ -373,12 +373,19 @@
 
 (define (handle-avatar-parent! ctx)
   (let ((parent (map-ref ctx "parent" ""))
+        (actor (map-ref ctx "actor" ""))
         (self (#.my.identity.did)))
-    (when (equal? parent self)
-      (guard (e (#t #f))
-        (let ((actor (map-ref ctx "actor" "")))
-          (actor-call actor "child" ctx)
-          (held-add! ctx))))))
+    (cond
+      ((equal? parent self)
+       (guard (e (#t #f))
+         (actor-call actor "child" ctx)
+         (held-add! ctx)))
+      ; The old parent's own confirmation that a committed transfer actually
+      ; happened (node.ma's commit-node-parent!) — the only trustworthy signal
+      ; that we're no longer holding it, so callers never clear held-item
+      ; themselves before the move is confirmed.
+      ((and held-item (equal? actor (entry-actor held-item)))
+       (held-clear!)))))
 
 (define (hold-target! target)
   (actor-call target "hold"))
@@ -409,8 +416,7 @@
                 (let ((current (entry-actor held-item)))
                   (actor-call (room) "drop" current)
                   (actor-call current "set-parent" (room))
-                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
-                  (held-clear!)))
+                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
               (let ((id (actor-call container "take" item)))
                 (when (string? id) (pending-store! id)))
               nil)))
@@ -422,8 +428,7 @@
                 (let ((current (entry-actor held-item)))
                   (actor-call (room) "drop" current)
                   (actor-call current "set-parent" (room))
-                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
-                  (held-clear!)))
+                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
               (hold-target! (entry-actor entry))
               nil)))))))
 
@@ -445,8 +450,7 @@
                 (let ((current (entry-actor held-item)))
                   (actor-call (room) "drop" current)
                   (actor-call current "set-parent" (room))
-                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
-                  (held-clear!)))
+                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
               (hold-target! did)
               (display (string-append "You found " (actor-call did "name") "."))
               nil)
@@ -462,8 +466,7 @@
           (let ((current (entry-actor held-item)))
             (actor-call (room) "drop" current)
             (actor-call current "set-parent" (room))
-            (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
-            (held-clear!)))
+            (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
         (let ((id (actor-call source "take" item)))
           (when (string? id) (pending-store! id)))
         nil))))
@@ -478,7 +481,6 @@
             (actor-call (room) "drop" target)
             (actor-call target "set-parent" (room))
             (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
-            (held-clear!)
             nil))))
     (let ((name (join-words rest)))
       (if (not held-item)
@@ -493,7 +495,6 @@
                 (actor-call (room) "drop" target)
                 (actor-call target "set-parent" (room))
                 (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
-                (held-clear!)
                 nil))))))))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
@@ -524,9 +525,7 @@
                  (item (entry-actor item-entry))
                  (container (resolve-one (join-words container-words))))
             (let ((id (actor-call item "put" container)))
-              (when (string? id) (pending-store! id))
-              (when (and held-item (equal? item (entry-actor held-item)))
-                (held-clear!)))
+              (when (string? id) (pending-store! id)))
             nil))))))
 
 (define (put-in . words)

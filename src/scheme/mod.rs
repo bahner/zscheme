@@ -48,8 +48,9 @@ mod tests {
     use super::is_dot_command_line;
     use futures::{channel::oneshot, future::LocalBoxFuture};
     use ma_zscheme::{
-        eval_source_in, Ctx, Env, SchemeCtx, SchemeErr, SchemeVal,
+        eval_source_in,
         parser::{parse_expr, tokenize},
+        Ctx, Env, SchemeCtx, SchemeErr, SchemeVal,
     };
     use std::rc::Rc;
 
@@ -93,7 +94,7 @@ mod tests {
             _actor: &'a str,
             _args: &'a [SchemeVal],
         ) -> LocalBoxFuture<'a, Result<SchemeVal, SchemeErr>> {
-            Box::pin(async { Ok(SchemeVal::Map(Default::default())) })
+            Box::pin(async { Ok(SchemeVal::Map(std::collections::BTreeMap::default())) })
         }
 
         fn send_rpc<'a>(
@@ -134,19 +135,21 @@ mod tests {
 
     #[test]
     fn generated_startup_scheme_parses() {
-        let source = std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
+        let source =
+            std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
         let tokens = tokenize(&source).expect("tokenise generated startup Scheme");
         let mut position = 0;
         while position < tokens.len() {
-            let (_, next_position) = parse_expr(&tokens, position)
-                .expect("parse generated startup Scheme");
+            let (_, next_position) =
+                parse_expr(&tokens, position).expect("parse generated startup Scheme");
             position = next_position;
         }
     }
 
     #[test]
     fn generated_startup_scheme_loads_and_resolves_default_pool() {
-        let mut source = std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
+        let mut source =
+            std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
         source.push_str("\n(default-pool)\n");
         let context: Ctx = Rc::new(StartupTestCtx);
         futures::executor::block_on(eval_source_in(&source, Env::new_root(), context))
