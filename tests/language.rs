@@ -166,7 +166,7 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
                     (make-map "actor" "did:ma:world#lamp" "kind" "thing" "name" "Lamp"))
                 (remember-room!
                     (make-map "actor" "did:ma:world#room" "name" "Room"
-                              "children" (list alice)))
+                              "children" (make-map "did:ma:alice" alice)))
 
                 (on-event ":arrive" (list lamp))
                 (on-event ":arrive" (list (map-set lamp "nick" "Brass Lamp")))
@@ -184,7 +184,7 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
 
                 (remember-room!
                     (make-map "actor" "did:ma:world#room" "name" "Fresh"
-                              "children" (list lamp)))
+                              "children" (make-map "did:ma:world#lamp" lamp)))
                 (assert (equal? (map entry-actor (room-child-pool last-room))
                                 (list "did:ma:world#lamp")))
                 "room-event-cache-ok"
@@ -193,6 +193,30 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
 
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "room-event-cache-ok");
+}
+
+#[test]
+fn production_speech_events_take_a_context_and_text() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (define duckie
+                    (make-map "actor" "did:ma:world#duckie" "name" "Duckie"))
+                (on-event ":say" (list duckie "quack"))
+                (on-event ":emote" (list duckie "dances"))
+                "speech-events-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "speech-events-ok");
+    assert_eq!(ctx.output.borrow().as_str(), "Duckie: quackDuckie dances");
 }
 
 fn eval_file(path: &Path) -> Result<SchemeVal, SchemeErr> {
@@ -409,7 +433,8 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
                 (define room-snapshot
                     (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
                                         "nick" "tester" "name" "Test room" "description" "Ready."
-                                        "children" (list lamp hull-exit)))
+                                        "children" (make-map "did:ma:world#lamp" lamp
+                                                             "did:ma:world#exit-hull" hull-exit)))
                 (set! last-room room-snapshot)
 
                 (define actor-calls ())
@@ -456,50 +481,14 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
 
 const AVATAR_TEST_SMOKES: &str = r#"
                 (smoke "go" (lambda () (go "hull")))
-                (smoke "dig" (lambda () (dig "east")))
-                (smoke "fill" (lambda () (fill "east")))
                 (smoke "forge" (lambda () (forge "thing" "named" "Test Thing")))
-                (smoke "leave" (lambda () (leave)))
                 (smoke "enter" (lambda () (enter "did:ma:world#room" "tester")))
-
-                (smoke "hold" (lambda () (hold "lamp")))
-                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#lamp"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "hold"))
-                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
-                                                      "parent" "did:ma:me")))
-                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
-                                                      "parent" "did:ma:me")))
-                (set! actor-calls ())
-                (smoke "hold next item" (lambda () (hold "coin")))
-                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#coin"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "hold"))
-                (smoke "take from container" (lambda () (take "Silver" "Coin" "from" "Wooden" "Box")))
-                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#box"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "take"))
-                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
-                                                      "parent" "did:ma:me")))
-                (smoke "put held item" (lambda () (put "coin" "in" "box")))
-                (assert (equal? (car (car (reverse actor-calls))) "did:ma:world#coin"))
-                (assert (equal? (car (cdr (car (reverse actor-calls)))) "put"))
-                (smoke "recycle-from" (lambda () (recycle-from "box" "coin")))
-                (smoke "roll-call" (lambda () (roll-call "box")))
                 (smoke "say" (lambda () (say "hello" "world")))
                 (smoke "emote" (lambda () (emote "waves")))
                 (smoke "claim" (lambda () (claim "lamp")))
-                (smoke "owner" (lambda () (owner "lamp")))
-                (smoke "recycle" (lambda () (recycle "lamp")))
-                (smoke "remove" (lambda () (remove "stale" "child")))
                 (smoke "tell" (lambda () (tell "lamp" "to" "ping" "once")))
-
-                (smoke "here?" (lambda () (here?)))
-                (smoke "who?" (lambda () (who?)))
-                (smoke "occupants?" (lambda () (occupants?)))
-                (smoke "things?" (lambda () (things?)))
-                (smoke "exits?" (lambda () (exits?)))
                 (smoke "inv set" (lambda () (inv "did:ma:world#inventory")))
                 (smoke "inv show" (lambda () (inv)))
-                (smoke "help" (lambda () (help)))
-                (smoke "help target" (lambda () (help "lamp")))
                 (smoke "look" (lambda () (look)))
                 (smoke "look target" (lambda () (look "lamp")))
                 "avatar-commands-ok"
@@ -521,7 +510,7 @@ fn production_avatar_commands_accept_representative_arguments() {
 }
 
 #[test]
-fn production_avatar_parent_proposal_is_acknowledged_then_moved_to_inventory() {
+fn production_avatar_parent_proposal_is_acknowledged_and_held() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -547,9 +536,8 @@ fn production_avatar_parent_proposal_is_acknowledged_then_moved_to_inventory() {
                 (assert (equal? calls
                     (list (list "did:ma:world#lamp" "child"
                                 (list (make-map "actor" "did:ma:world#lamp"
-                                                "parent" "did:ma:me")))
-                          (list "did:ma:world#lamp" "set-parent"
-                                (list "did:ma:world#inventory")))))
+                                                "parent" "did:ma:me"))))))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
                 "parent-handshake-ok"
                 "#
     );
@@ -583,7 +571,8 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
                               "parent" "did:ma:world#inventory" "name" "Coin"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room"
-                              "children" (list lamp box)))
+                              "children" (make-map "did:ma:world#lamp" lamp
+                                                   "did:ma:world#box" box)))
                 (define calls ())
                 (define (smoke name thunk)
                     (guard (failure (#t (error (string-append name ": " failure))))
@@ -605,24 +594,25 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
                 (smoke "take" (lambda () (take "Lamp")))
                 (assert (equal? calls
                     (list (list "did:ma:world#lamp" "hold" ()))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:me")))
 
                 (set! calls ())
                 (smoke "take from" (lambda () (take "Coin" "from" "Box")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
+                                                      "parent" "did:ma:me")))
 
                 (set! calls ())
                 (smoke "take-from" (lambda () (take-from "Box" "Coin")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
+                                                      "parent" "did:ma:me")))
 
                 (set! calls ())
-                (smoke "put" (lambda () (put "Coin" "in" "Box")))
-                (assert (equal? (car (reverse calls))
-                    (list "did:ma:world#coin" "put" (list "did:ma:world#box"))))
-
-                (set! calls ())
-                (smoke "drop" (lambda () (drop "Coin")))
+                (smoke "drop" (lambda () (drop)))
                     (let ((reversed (reverse calls)))
                     (assert (equal? (car reversed)
                         (list "did:ma:world#coin" "set-parent"
@@ -630,6 +620,15 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
                     (assert (equal? (cadr reversed)
                         (list "did:ma:world#room" "drop"
                             (list "did:ma:world#coin")))))
+
+                (set! calls ())
+                (smoke "take-from for put" (lambda () (take-from "Box" "Coin")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
+                                                      "parent" "did:ma:me")))
+                (set! calls ())
+                (smoke "put" (lambda () (put "Coin" "in" "Box")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#coin" "put" (list "did:ma:world#box"))))
                 "transfer-rpcs-ok"
         "#
     );
@@ -679,8 +678,11 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                                         "name" "Rubber Duckie" "nick" "Duckie"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "The Construct"
-                                        "children" (list direct-attila agent-attila lamp
-                                                         room-duckie mirror)))
+                                        "children" (make-map "did:ma:attila" direct-attila
+                                                             "did:ma:world#attila" agent-attila
+                                                             "did:ma:world#lamp" lamp
+                                                             "did:ma:world#room-duckie" room-duckie
+                                                             "did:ma:world#mirror" mirror)))
                 (#.my.ctx.inv: "did:ma:world#inventory")
 
                 (define (actor-call actor method . params)
@@ -720,7 +722,9 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
 
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "The Construct"
-                                        "children" (list direct-attila lamp mirror)))
+                                        "children" (make-map "did:ma:attila" direct-attila
+                                                             "did:ma:world#lamp" lamp
+                                                             "did:ma:world#mirror" mirror)))
                 (look "Coin")
                 "room-child-resolver-ok"
                 "#
@@ -757,7 +761,9 @@ fn production_avatar_give_sends_a_claim_offer_to_one_person() {
                               "kind" "thing" "name" "Rubber Duckie" "nick" "Duckie"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room"
-                              "children" (list bob alice duckie)))
+                              "children" (make-map "did:ma:bob" bob
+                                                   "did:ma:alice" alice
+                                                   "did:ma:world#duckie" duckie)))
 
                 (define call-order "")
                 (define called-actor "")

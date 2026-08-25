@@ -77,9 +77,7 @@
       (when actor
         (set! last-room
           (map-set last-room "children"
-            (cons ctx
-                  (filter (lambda (child) (not (equal? (entry-actor child) actor)))
-                          (room-child-pool last-room)))))))))
+            (map-set (map-ref last-room "children" (make-map)) actor ctx)))))))
 
 (define (room-child-remove! ctx)
   (when (and (map? last-room) (map? ctx))
@@ -87,8 +85,7 @@
       (when actor
         (set! last-room
           (map-set last-room "children"
-            (filter (lambda (child) (not (equal? (entry-actor child) actor)))
-                    (room-child-pool last-room))))))))
+            (map-delete (map-ref last-room "children" (make-map)) actor)))))))
 
 (define (event-arrive ctx)
   (room-child-upsert! ctx)

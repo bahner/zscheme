@@ -126,10 +126,18 @@
   (let ((inv (usable-inventory)))
     (if inv (guard (e (#t ())) (container-contents inv)) ())))
 
+(define held-item #f)
+(define (hand-pool) (if held-item (list held-item) ()))
+(define (held-clear!) (set! held-item #f))
+(define (held-add! ctx)
+  (let ((actor (entry-actor ctx)))
+    (when (string? actor)
+      (set! held-item ctx))))
+
 ; The default candidate pool for a bare name: every child in the room plus
 ; everything in the configured inventory container.
 (define (default-pool)
-  (append (resolve-room-pool) (resolve-inventory-pool)))
+  (append (hand-pool) (append (resolve-room-pool) (resolve-inventory-pool))))
 
 ; The single place that turns (word, pool) into one resolved entry or raises
 ; no-match/ambiguous — never builds the pool itself; every caller assembles
@@ -227,8 +235,8 @@
 ; the runtime root. Resolver paths use `my-inv-if-any` so ordinary object
 ; handling never creates inventory as a side effect.
 (define (my-inv)
-  (let ((existing (guard (e (#t "")) (#.my.ctx.inv))))
-    (if (and (string? existing) (not (equal? existing "")))
+  (let ((existing (guard (e (#t #f)) (#.my.ctx.inv))))
+    (if (starts-with-did? existing)
       existing
       (let ((created (actor-call (root) "forge"
                                  (make-map "kind" "/ma/container/0.0.1"
@@ -242,7 +250,8 @@
 (define (my-inv-if-any)
   (guard (e (#t #f))
     (let ((existing (#.my.ctx.inv)))
-      (if (and (string? existing) (not (equal? existing "")))
+      ; reject stale non-DID values so usable-inventory never calls actor-call on garbage
+      (if (starts-with-did? existing)
         existing
         #f))))
 
@@ -328,15 +337,10 @@
       (guard (e (#t #f))
         (let ((actor (map-ref ctx "actor" "")))
           (actor-call actor "child" ctx)
-          (actor-call actor "set-parent" (my-inv)))))))
+          (held-add! ctx))))))
 
 (define (hold-target! target)
   (actor-call target "hold"))
-
-(define (hold name)
-  (let ((entry (resolve-one-entry-fresh name default-pool)))
-    (hold-target! (entry-actor entry))
-    nil))
 
 ; Take without `from` sends the ownership-blind :hold trigger directly to a
 ; room child. Taking from a container uses the container's lock/contents gate;
@@ -349,29 +353,63 @@
       (error "usage: take <item...> [from <container...>]")
       (if container-words
         (let* ((container (resolve-one (join-words container-words)))
-               (item (resolve-in-container (join-words item-words) container))
-               (id (actor-call container "take" item)))
-          (when (string? id) (pending-store! id))
+               (item (resolve-in-container (join-words item-words) container)))
+          (when held-item
+            (let ((current (entry-actor held-item)))
+              (actor-call (room) "drop" current)
+              (actor-call current "set-parent" (room))
+              (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
+              (held-clear!)))
+          (let ((id (actor-call container "take" item)))
+            (when (string? id) (pending-store! id)))
           nil)
         (let ((entry (resolve-one-entry-fresh (join-words item-words) resolve-room-pool)))
+          (when held-item
+            (let ((current (entry-actor held-item)))
+              (actor-call (room) "drop" current)
+              (actor-call current "set-parent" (room))
+              (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
+              (held-clear!)))
           (hold-target! (entry-actor entry))
           nil)))))
 
 (define (take-from container name)
   (let* ((source (resolve-one container))
-         (item (resolve-in-container name source))
-         (id (actor-call source "take" item)))
-    (when (string? id) (pending-store! id))
+         (item (resolve-in-container name source)))
+    (when held-item
+      (let ((current (entry-actor held-item)))
+        (actor-call (room) "drop" current)
+        (actor-call current "set-parent" (room))
+        (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))
+        (held-clear!)))
+    (let ((id (actor-call source "take" item)))
+      (when (string? id) (pending-store! id)))
     nil))
 
 (define (drop . rest)
   (if (null? rest)
-    (error "usage: drop <item...>")
-    (begin
-      (let ((target (resolve-one (join-words rest))))
+    (if (not held-item)
+      (error "you're not holding anything")
+      (let ((target (entry-actor held-item)))
         (actor-call (room) "drop" target)
-        (actor-call target "set-parent" (room)))
-      nil)))
+        (actor-call target "set-parent" (room))
+        (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
+        (held-clear!)
+        nil))
+    (let ((name (join-words rest)))
+      (if (not held-item)
+        (error "you're not holding anything")
+        (let* ((target (entry-actor held-item))
+               (matched? (guard (e (#t #f))
+                           (equal? target (resolve-in-given-pool name (hand-pool))))))
+          (if (not matched?)
+            (error (string-append "you're not holding " name))
+            (begin
+              (actor-call (room) "drop" target)
+              (actor-call target "set-parent" (room))
+              (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
+              (held-clear!)
+              nil)))))))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
@@ -398,7 +436,9 @@
              (item (entry-actor item-entry))
              (container (resolve-one (join-words container-words))))
         (let ((id (actor-call item "put" container)))
-          (when (string? id) (pending-store! id)))
+          (when (string? id) (pending-store! id))
+          (when (and held-item (equal? item (entry-actor held-item)))
+            (held-clear!)))
         nil))))
 
 (define (put-in . words)
@@ -425,12 +465,13 @@
 (define (claim-usage-error)
   (error "usage: claim <object> [secret]"))
 
-(define (claim name . secret)
-  (if (or (null? secret) (null? (cdr secret)))
-    (begin
-      (apply command name "claim" secret)
-      nil)
-    (claim-usage-error)))
+(define (claim . args)
+  (cond
+    ((null? args) (claim-usage-error))
+    ((or (null? (cdr args)) (null? (cddr args)))
+     (apply command (car args) "claim" (cdr args))
+     nil)
+    (else (claim-usage-error))))
 
 (define (give-usage-error)
   (error "usage: give <object...> to <person...>"))
@@ -559,14 +600,10 @@
 ; any container works. `:kind?` guards against pointing it at a room, thing,
 ; or agent by mistake. Accepts a name or a bare DID-URL.
 (define (set-my-inv! container)
-  (let* ((did (if (starts-with-did? container) container (resolve-one container)))
+  (let* ((did (resolve-one container))
          (kind (actor-call did "kind?")))
     (if (equal? kind "/ma/container/0.0.1")
       (begin
-        (let ((old (my-inv-if-any)))
-          (when old
-            (actor-call (room) "drop" old)
-            (actor-call old "set-parent" (room))))
         (#.my.ctx.inv: did)
         (display (string-append "inventory set to " did)))
       (error (string-append "invalid inventory kind: " kind))))
@@ -574,9 +611,10 @@
 
 (define (inv . rest)
   (if (pair? rest)
-    (set-my-inv! (car rest))
+    (set-my-inv! (join-words rest))
     (begin
-      (event-things (container-contents (my-inv)))
+      (event-things (hand-pool))
+      (event-things (guard (e (#t ())) (container-contents (my-inv))))
       nil)))
 
 ; `help` with no argument shows the avatar's own command list; `help <name>`
@@ -597,11 +635,11 @@
         "things?                 list things here\n"
         "exits?                  list exits here\n"
         "here?                   show the current room's address\n"
-        "hold <name>             move something here into your inventory\n"
-        "take <name>             move something here into your inventory\n"
+        "take <name>             pick up something here (drops current held item first)\n"
         "take <name> from <container>  take something out of a container\n"
         "take-from <container> <name>  take something out of a container\n"
-        "drop <item>             drop an inventory item into the room\n"
+        "drop                    drop what you're holding\n"
+        "drop <item>             drop by name (error if you're not holding it)\n"
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
         "roll-call <container>       check a container's children\n"
@@ -640,10 +678,21 @@
 
 (define (look . rest)
   (if (pair? rest)
-    (let ((entry (resolve-one-entry-fresh (join-words rest) default-pool)))
-      (if (equal? (map-ref entry "kind" "") "container")
-        (display (actor-call (entry-actor entry) "look"))
-        (look-entry entry)))
+    (let* ((word (join-words rest))
+           (entry
+             (if (starts-with-did? word)
+               ; Direct DID-URL: search pool, refresh once on miss.
+               (let ((pool (default-pool)))
+                 (or (find-entry-by-actor pool word)
+                     (find-entry-by-actor
+                       (begin (remember-room! (room-call "look")) (default-pool))
+                       word)))
+               (resolve-one-entry-fresh word default-pool))))
+      (if entry
+        (if (equal? (map-ref entry "kind" "") "container")
+          (display (actor-call (entry-actor entry) "look"))
+          (look-entry entry))
+        (error (string-append word " is not here."))))
     (let ((snapshot (remember-room! (room-call "look"))))
       (if (map? snapshot)
         (event-look snapshot)
