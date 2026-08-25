@@ -54,6 +54,18 @@ The host delivers typed unsolicited events but must not sequence `:hold`,
 `on-event` in zscheme owns `:parent` handshakes and every
 container/duckie/object-transfer decision.
 
+The host forwards **every** unsolicited RPC term, not a curated subset, and no
+longer validates argument shapes. `on-event` is therefore the only filter:
+unknown verbs must be ignored silently, and a handler must not assume its
+arguments have the shape a well-behaved actor would send. Treat every event
+payload as untrusted remote input — check `(map? ctx)` before `map-ref`, and
+keep dispatch guarded so one malformed message cannot break the event loop.
+
+`:roll-call-child` is answered like any other node: re-announce to our own
+cached parent with the ordinary `:parent <ctx>`. The pinger's identity is
+irrelevant, and answering must have no parenting side effects. Roll-call is
+runtime policy — a client only ever answers one, never starts one.
+
 All object arguments use one room-child resolver over `who`, `agents`,
 `things`, and `exits`, followed by inventory contents. Exactly one match is
 accepted; no match is an error, and multiple matches list their DID/DID-URLs so
