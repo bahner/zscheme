@@ -32,10 +32,22 @@
 ; resolver before addressing anything directly. A bare `did:ma:` string always
 ; passes through unresolved.
 
+; The pool consulted for a parent's own name: the current room's direct
+; children (this includes containers, whose contents carry the container's
+; DID as their own "parent") plus the inventory contents pool.
+(define (location-lookup-pool)
+  (append (if (map? last-room) (room-child-pool last-room) ())
+          (resolve-inventory-pool)))
+
 (define (candidate-location entry)
-  (let ((parent (map-ref entry "parent" #f))
-        (inventory (my-inv-if-any)))
-    (cond ((and (string? parent) inventory (equal? parent inventory))
+  (let* ((parent (map-ref entry "parent" #f))
+         (parent-entry (and (string? parent) (find-entry-by-actor (location-lookup-pool) parent))))
+    (cond ((map? parent-entry)
+           (let ((parent-name (map-ref parent-entry "name" #f)))
+             (if (and (string? parent-name) (not (equal? parent-name "")))
+               parent-name
+               #f)))
+          ((and (string? parent) (my-inv-if-any) (equal? parent (my-inv-if-any)))
            "inventory")
           ((and (string? parent)
                 (map? last-room)
