@@ -22,6 +22,12 @@
             title
             entries))))
 
+(define (event-things-lines title things)
+  (let ((entries (event-list-values things)))
+    (if (null? entries)
+      (string-append title "Inventory is empty.")
+      (event-list-lines (string-append title "Things:") entries event-name))))
+
 (define (event-exit-name exit)
   (if (map? exit)
     (map-ref exit "direction" (event-name exit))
@@ -56,7 +62,7 @@
         name
         (if (string? description) (string-append "\n" description) "")
         (event-list-lines "\nOccupants:" occupants event-name)
-        (event-list-lines "\nThings:" things event-name)
+        (event-things-lines "\n" things)
         (event-exit-lines "\nExits:" exits)))))
 
 (define (event-exits exits)
@@ -69,7 +75,7 @@
   (display (string-append "Occupants:" (event-list-lines "" occupants event-name))))
 
 (define (event-things things)
-  (display (string-append "Things:" (event-list-lines "" things event-name))))
+  (display (event-things-lines "" things)))
 
 (define (room-child-upsert! ctx)
   (when (and (map? last-room) (map? ctx))

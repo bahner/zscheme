@@ -145,7 +145,7 @@ fn production_events_render_humans_and_agents_as_occupants() {
     let (_, ctx) = eval(&source).unwrap();
     assert_eq!(
         ctx.output.borrow().as_str(),
-        "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nExits:\nmirror"
+        "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nInventory is empty.\nExits:\nmirror"
     );
 }
 

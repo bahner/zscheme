@@ -724,9 +724,8 @@
 (define (inv . rest)
   (if (pair? rest)
     (set-my-inv! (join-words rest))
-    (begin
-      (event-things (hand-pool))
-      (event-things (guard (e (#t ())) (container-contents (my-inv))))
+    (let ((contents (guard (e (#t ())) (container-contents (my-inv)))))
+      (event-things (append (hand-pool) contents))
       nil)))
 
 ; `help` with no argument shows the avatar's own command list; `help <name>`
