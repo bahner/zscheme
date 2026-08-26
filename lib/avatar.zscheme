@@ -362,6 +362,15 @@
 (define (leave)
   (room-call "leave"))
 
+; Trigger the current room to re-announce its own `:here` cascade to all
+; current children. This is the avatar-side convenience wrapper that fires the
+; room's own authoritative same-room propagation, not a generic parent check.
+(define (start-here)
+  (let ((room-did (room)))
+    (when (string? room-did)
+      (room-call "here" room-did))
+    nil))
+
 (define (enter target nick)
   (let ((result (apply-entry-ctx! (actor-call target "enter" nick))))
     (if (map? result) (look) (display result)))
@@ -771,6 +780,7 @@
         "fill <direction>        remove an exit\n"
         "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"
         "enter <target> <nick>   enter a room directly by address\n"
+        "start-here              trigger the current room to cascade :here to its children\n"
         "leave                   leave the current room\n"
         "\n"
         "--- meta ---\n"
