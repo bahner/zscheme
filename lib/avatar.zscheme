@@ -337,8 +337,26 @@
 (define (fill direction)
   (room-call "fill" direction))
 
-(define (forge-usage-error)
-  (error "usage: forge <kind> named <name...> [in <target...>]"))
+;; ── Command grammar ──────────────────────────────────────────────────────────
+;; The reserved-keyword commands (`take … from …`, `put … in …`, `give … to …`,
+;; `tell … to …`, `name … as …`) all share one shape: words split by a hard
+;; separator keyword. This is the single grammar primitive; each command names
+;; its keyword, whether the trailing slot is required, and its usage text.
+
+; Split `words` on `keyword`. Raises `usage-text` when the slot before the
+; keyword is empty, when a required keyword is missing, or when the keyword is
+; present but followed by no words. Returns (list before after) where `after`
+; is #f when the keyword is absent.
+(define (split-command! words keyword usage-text required?)
+  (let ((before (words-before-keyword words keyword))
+        (after (words-after-keyword words keyword)))
+    (when (or (null? before)
+              (and required? (not after))
+              (and after (null? after)))
+      (error usage-text))
+    (list before after)))
+
+(define forge-usage "usage: forge <kind> named <name...> [in <target...>]")
 
 ; Direct child creation (ma-spec sec 7) — no avatar mediation on the runtime
 ; side. The reply payload is either the new entity's DID-URL or a refusal
@@ -348,16 +366,13 @@
 ; named name` defaults into your own inventory instead of a room/container.
 (define (forge kind . rest)
   (if (or (null? rest) (not (equal? (car rest) "named")))
-      (forge-usage-error)
-      (let* ((after-named (cdr rest))
-             (name-words (words-before-keyword after-named "in"))
-             (target-words (words-after-keyword after-named "in")))
-        (if (or (null? name-words) (and target-words (null? target-words)))
-            (forge-usage-error)
-            (let ((name (join-words name-words))
-                  (target (if (pair? target-words) (join-words target-words) (or (my-inv-if-any) (room)))))
-              (display (command target "forge" (make-map "kind" kind "name" name)))
-              nil)))))
+      (error forge-usage)
+      (let* ((s (split-command! (cdr rest) "in" forge-usage #f))
+             (name (join-words (car s)))
+             (target-words (cadr s))
+             (target (if target-words (join-words target-words) (or (my-inv-if-any) (room)))))
+        (display (command target "forge" (make-map "kind" kind "name" name)))
+        nil)))
 
 (define (leave)
   (room-call "leave"))
@@ -406,40 +421,40 @@
   (guard (e (#t (error (string-append description " — " e))))
     (thunk)))
 
+(define take-usage "usage: take <item...> [from <container...>]")
+
 ; Take without `from` sends the ownership-blind :hold trigger directly to a
 ; room child. Taking from a container uses the container's lock/contents gate;
 ; root then asks the item to propose itself to this avatar.
 (define (take . words)
-  (let* ((item-words (words-before-keyword words "from"))
-         (container-words (words-after-keyword words "from")))
-    (if (or (null? item-words)
-            (and container-words (null? container-words)))
-      (error "usage: take <item...> [from <container...>]")
-      (if container-words
-        (with-action-context
-          (string-append "could not take " (join-words item-words) " from " (join-words container-words))
-          (lambda ()
-            (let* ((container (resolve-one (join-words container-words)))
-                   (item (resolve-in-container (join-words item-words) container)))
-              (when held-item
-                (let ((current (entry-actor held-item)))
-                  (actor-call (room) "drop" current)
-                  (actor-call current "set-parent" (room))
-                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
-              (let ((id (actor-call container "take" item)))
-                (when (string? id) (pending-store! id)))
-              nil)))
-        (with-action-context
-          (string-append "could not take " (join-words item-words))
-          (lambda ()
-            (let ((entry (resolve-one-entry-fresh (join-words item-words) resolve-room-pool)))
-              (when held-item
-                (let ((current (entry-actor held-item)))
-                  (actor-call (room) "drop" current)
-                  (actor-call current "set-parent" (room))
-                  (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
-              (hold-target! (entry-actor entry))
-              nil)))))))
+  (let* ((s (split-command! words "from" take-usage #f))
+         (item-words (car s))
+         (container-words (cadr s)))
+    (if container-words
+      (with-action-context
+        (string-append "could not take " (join-words item-words) " from " (join-words container-words))
+        (lambda ()
+          (let* ((container (resolve-one (join-words container-words)))
+                 (item (resolve-in-container (join-words item-words) container)))
+            (when held-item
+              (let ((current (entry-actor held-item)))
+                (actor-call (room) "drop" current)
+                (actor-call current "set-parent" (room))
+                (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
+            (let ((id (actor-call container "take" item)))
+              (when (string? id) (pending-store! id)))
+            nil)))
+      (with-action-context
+        (string-append "could not take " (join-words item-words))
+        (lambda ()
+          (let ((entry (resolve-one-entry-fresh (join-words item-words) resolve-room-pool)))
+            (when held-item
+              (let ((current (entry-actor held-item)))
+                (actor-call (room) "drop" current)
+                (actor-call current "set-parent" (room))
+                (when (equal? current (my-inv-if-any)) (#.my.ctx.inv:))))
+            (hold-target! (entry-actor entry))
+            nil))))))
 
 ; A cheat: locate an object by its bare DID even though it never surfaces in
 ; `look`/`inv` (e.g. it isn't a child of the current room or your inventory
@@ -508,8 +523,7 @@
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
-(define (put-usage-error)
-  (error "usage: put <item...> in <container...>"))
+(define put-usage "usage: put <item...> in <container...>")
 
 (define pending-actions (make-map))
 
@@ -523,19 +537,18 @@
 ; human-readable multi-word names. The item itself initiates the put request;
 ; actor authority and container admission remain runtime decisions.
 (define (put . words)
-  (let ((item-words (words-before-keyword words "in"))
-        (container-words (words-after-keyword words "in")))
-    (if (or (null? item-words) (not container-words) (null? container-words))
-      (put-usage-error)
-      (with-action-context
-        (string-append "could not put " (join-words item-words) " in " (join-words container-words))
-        (lambda ()
-          (let* ((item-entry (resolve-one-entry-fresh (join-words item-words) default-pool))
-                 (item (entry-actor item-entry))
-                 (container (resolve-one (join-words container-words))))
-            (let ((id (actor-call item "put" container)))
-              (when (string? id) (pending-store! id)))
-            nil))))))
+  (let* ((s (split-command! words "in" put-usage #t))
+         (item-words (car s))
+         (container-words (cadr s)))
+    (with-action-context
+      (string-append "could not put " (join-words item-words) " in " (join-words container-words))
+      (lambda ()
+        (let* ((item-entry (resolve-one-entry-fresh (join-words item-words) default-pool))
+               (item (entry-actor item-entry))
+               (container (resolve-one (join-words container-words))))
+          (let ((id (actor-call item "put" container)))
+            (when (string? id) (pending-store! id)))
+          nil)))))
 
 (define (put-in . words)
   (apply put words))
@@ -594,8 +607,7 @@
      nil)
     (else (claim-usage-error))))
 
-(define (give-usage-error)
-  (error "usage: give <object...> to <person...>"))
+(define give-usage "usage: give <object...> to <person...>")
 
 (define (claim-secret)
   (string-append
@@ -607,25 +619,24 @@
 ; installs a one-time recovery secret, then sends the recipient an ordinary
 ; inbox message. Nothing changes until that person runs the included claim.
 (define (give . words)
-  (let ((object-words (words-before-keyword words "to"))
-        (person-words (words-after-keyword words "to")))
-    (if (or (null? object-words) (not person-words) (null? person-words))
-      (give-usage-error)
-      (let* ((object-text (join-words object-words))
-             (object-entry (resolve-one-entry-fresh object-text default-pool))
-             (object (entry-actor object-entry))
-             (recipient (resolve-person (join-words person-words))))
-        (if (or (bare-did? object) (not (starts-with-did? object)))
-          (error (string-append "\"" object-text "\" is not an object."))
-          (let* ((token (claim-secret))
-                 (giver-entry (candidate-for-did (person-pool last-room) (#.my.identity.did)))
-                 (message (string-append
-                            (event-name giver-entry) " wants to give you "
-                            (event-name object-entry) ". Accept with: claim "
-                            object " " token)))
-            (actor-call object "set-recovery-secret" token)
-            (let ((sent (msg-send recipient message)))
-              (if (ok? sent) nil (error (err-msg sent))))))))))
+  (let* ((s (split-command! words "to" give-usage #t))
+         (object-words (car s))
+         (person-words (cadr s))
+         (object-text (join-words object-words))
+         (object-entry (resolve-one-entry-fresh object-text default-pool))
+         (object (entry-actor object-entry))
+         (recipient (resolve-person (join-words person-words))))
+    (if (or (bare-did? object) (not (starts-with-did? object)))
+      (error (string-append "\"" object-text "\" is not an object."))
+      (let* ((token (claim-secret))
+             (giver-entry (candidate-for-did (person-pool last-room) (#.my.identity.did)))
+             (message (string-append
+                        (event-name giver-entry) " wants to give you "
+                        (event-name object-entry) ". Accept with: claim "
+                        object " " token)))
+        (actor-call object "set-recovery-secret" token)
+        (let ((sent (msg-send recipient message)))
+          (if (ok? sent) nil (error (err-msg sent))))))))
 
 (define (owner name)
   (display (command name "owner?"))
@@ -645,8 +656,7 @@
       (display (room-call "remove" (join-words words)))
       nil)))
 
-(define (tell-usage-error)
-  (error "usage: tell <target...> to <verb> [args...]"))
+(define tell-usage "usage: tell <target...> to <verb> [args...]")
 
 ; Generic in-world request forwarding: "to" is a hard separator, not just
 ; style, so a multi-word target description can precede it (e.g. "tell golden
@@ -654,18 +664,17 @@
 ; set-cmd-method!/reply-error decides whether to comply or refuse — tell only
 ; resolves and relays, exactly like owner/claim do for their one dedicated verb.
 (define (tell . words)
-  (let ((target-words (words-before-keyword words "to"))
-        (after-to (words-after-keyword words "to")))
-    (if (or (null? target-words) (not after-to) (null? after-to))
-      (tell-usage-error)
-            (let* ((verb (car after-to))
-             (args (cdr after-to))
-              (reply (apply command (join-words target-words) verb args)))
-        ; A bare :ok ack (Nil) carries no information — the target's own
-        ; :print broadcast, if any, is the real narrative; only a non-nil
-        ; reply is worth showing here.
-        (unless (null? reply) (display reply))
-        nil))))
+  (let* ((s (split-command! words "to" tell-usage #t))
+         (target-words (car s))
+         (after-to (cadr s))
+         (verb (car after-to))
+         (args (cdr after-to))
+         (reply (apply command (join-words target-words) verb args)))
+    ; A bare :ok ack (Nil) carries no information — the target's own :print
+    ; broadcast, if any, is the real narrative; only a non-nil reply is worth
+    ; showing here.
+    (unless (null? reply) (display reply))
+    nil))
 
 ;; ── Property setters ───────────────────────────────────────────────────────
 
@@ -676,11 +685,12 @@
 ; `as` separates target from value, so multi-word names and descriptions need
 ; no quoting: `name golden duckie as The Golden Duckie`.
 (define (prop-as-sugar prop-key words)
-  (let ((target-words (words-before-keyword words "as"))
-        (value-words (words-after-keyword words "as")))
-    (if (or (null? target-words) (not value-words))
-      (error (string-append "usage: " prop-key " <target...> as <value...>"))
-      (apply prop (join-words target-words) prop-key value-words))))
+  (let* ((s (split-command! words "as"
+                            (string-append "usage: " prop-key " <target...> as <value...>")
+                            #t))
+         (target-words (car s))
+         (value-words (cadr s)))
+    (apply prop (join-words target-words) prop-key value-words)))
 
 (define (name . words) (prop-as-sugar "name" words))
 (define (describe . words) (prop-as-sugar "description" words))

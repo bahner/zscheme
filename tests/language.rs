@@ -638,6 +638,42 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
 }
 
 #[test]
+fn production_split_command_parses_reserved_keyword_slots() {
+    let source = ["stdlib", "avatar"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                ; Required keyword with before and after.
+                (assert (equal? (split-command! (list "lampe" "in" "vadsæk") "in" "usage" #t)
+                                (list (list "lampe") (list "vadsæk"))))
+                ; Optional keyword absent leaves after as #f.
+                (assert (equal? (split-command! (list "lampe") "from" "usage" #f)
+                                (list (list "lampe") #f)))
+                ; Optional keyword present captures after.
+                (assert (equal? (split-command! (list "lampe" "from" "vadsæk") "from" "usage" #f)
+                                (list (list "lampe") (list "vadsæk"))))
+
+                ; Errors: empty before, missing required keyword, empty after.
+                (assert (equal? (guard (e (#t "raised")) (split-command! () "in" "usage" #t) "returned")
+                                "raised"))
+                (assert (equal? (guard (e (#t "raised")) (split-command! (list "lampe") "in" "usage" #t) "returned")
+                                "raised"))
+                (assert (equal? (guard (e (#t "raised")) (split-command! (list "lampe" "in") "in" "usage" #t) "returned")
+                                "raised"))
+                "split-command-ok"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "split-command-ok");
+}
+
+#[test]
 fn production_find_takes_a_hidden_object_only_when_within_reach() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
