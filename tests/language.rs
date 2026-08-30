@@ -2041,10 +2041,10 @@ fn production_avatar_give_sends_a_claim_offer_to_one_person() {
                 (#.my.identity.did: "did:ma:bob")
                 (define bob
                     (make-map "did" "did:ma:bob" "actor" "did:ma:bob"
-                              "kind" "agent" "name" "Bob" "nick" "Bob"))
+                              "kind" "h00man" "name" "Bob" "nick" "Bob"))
                 (define alice
                     (make-map "did" "did:ma:alice" "actor" "did:ma:alice"
-                              "kind" "agent" "name" "Alice" "nick" "Alice"))
+                              "kind" "h00man" "name" "Alice" "nick" "Alice"))
                 (define duckie
                     (make-map "actor" "did:ma:world#duckie"
                               "kind" "thing" "name" "Rubber Duckie" "nick" "Duckie"))

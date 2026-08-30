@@ -167,6 +167,21 @@
 (define (event-roll-call-child . args)
   (announce-avatar-parent!))
 
+; The avatar refuses to be handled as an object. This refusal lives only here,
+; in the object itself — no kind-based rule in the resolver, avatar commands,
+; or runtime actors — so runtime agents (a duckie, a chest) remain freely
+; holdable and stowable. Consent-based holding and chesting is planned; until
+; then these handlers are the whole gate, and enabling it later means deleting
+; or gating them — nothing else, and no Rust change.
+(define (event-refuse-hold . args)
+  (display "You refuse to be held."))
+
+(define (event-refuse-put . args)
+  (display "You refuse to be put into a container."))
+
+(define (event-refuse-set-parent . args)
+  (display "You refuse to be relocated."))
+
 ;; ── Data-directed event dispatch ────────────────────────────────────────────
 ;;
 ;; Adding a presentation-only event means defining one procedure and adding one
@@ -185,6 +200,9 @@
             ":fill" event-fill
             ":parent" event-parent
             ":roll-call-child" event-roll-call-child
+            ":hold" event-refuse-hold
+            ":put" event-refuse-put
+            ":set-parent" event-refuse-set-parent
             ":put-event" event-put
             ":take-event" event-take-done))
 

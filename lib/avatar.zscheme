@@ -93,13 +93,19 @@
   (filter (lambda (entry) (equal? (map-ref entry "kind" "") kind))
           (room-child-pool room)))
 
+; person == h00man: the people one can meaningfully talk to (or give to).
 (define (person-pool room)
-  (filter (lambda (entry)
-            (let ((actor (entry-actor entry)))
-              (and (starts-with-did? actor) (not (string-contains actor "#")))))
-          (room-child-pool room)))
+  (room-child-kind-pool room "h00man"))
 
-(define (occupant-pool room) (room-child-kind-pool room "agent"))
+; Occupant kinds: h00man direct-DID presence plus runtime agents. The room's
+; `who?` view narrows this to h00man only; this pool feeds "Occupants:"
+; presentation.
+(define occupant-kinds (list "agent" "h00man"))
+
+(define (occupant-pool room)
+  (filter (lambda (entry)
+            (member? (map-ref entry "kind" "") occupant-kinds))
+          (room-child-pool room)))
 
 (define (thing-pool room)
   (filter (lambda (entry)
@@ -206,7 +212,10 @@
 (define (resolve-person word)
   (let* ((entry (resolve-one-entry-fresh word resolve-person-pool))
          (did (entry-actor entry)))
-    (cond ((not (bare-did? did))
+    (cond ((not (equal? (map-ref entry "kind" "") "h00man"))
+           ; A DID/DID-URL word that matches no pool entry gets a synthetic
+           ; fallback entry from candidate-for-did; only a genuine h00man
+           ; member of the room is a valid recipient.
            (error (string-append "\"" word "\" is not a person.")))
           ((equal? did (#.my.identity.did))
            (error "you can't give something to yourself."))
@@ -266,7 +275,9 @@
     (if (and (string? value) (not (equal? value ""))) value fallback)))
 
 ; This avatar's own child ctx, in the shape every node reports to its parent.
-; A bare DID has no identity actor, so the client assembles it here.
+; A bare DID has no identity entity, so the client assembles it here. The kind
+; is "h00man" — the human presence kind — while "protocol" stays the generic
+; agent protocol: no new /ma/* protocol is being introduced, only the kind.
 (define (my-node-ctx)
   (let* ((did (#.my.identity.did))
          (name (local-string (lambda () (#.my.profile.name)) did))
@@ -274,7 +285,7 @@
     (make-map "actor" did
               "did" did
               "parent" (room)
-              "kind" "agent"
+              "kind" "h00man"
               "protocol" "/ma/agent/0.0.1"
               "name" name
               "nick" nick
@@ -949,7 +960,7 @@
   nil)
 
 (define (who?)
-  (event-who (room-call "who?"))
+  (event-who (resolve-person-pool))
   nil)
 
 (define (occupants?)
