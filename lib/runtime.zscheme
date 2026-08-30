@@ -21,16 +21,6 @@
 (define (actor-call actor method . args)
   (apply (string-append actor ":" method) args))
 
-;; Reply-shape predicates. ok? is the bare :ok ack (success, no payload);
-;; ok-reply? is the (:ok payload) tuple (success carrying a payload). The
-;; payload itself is plain (cdr reply). These mirror the ma-zscheme builtins
-;; of the same names and may be dropped once a release ships them.
-(define (ok? reply)
-  (equal? reply ":ok"))
-
-(define (ok-reply? reply)
-  (and (pair? reply) (equal? (car reply) ":ok")))
-
 ; `#root` is the direct-DID profile's fixed local trust anchor. Unlike
 ; optional runtime services, its address needs no service-directory lookup.
 (define (root)
