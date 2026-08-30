@@ -699,6 +699,84 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
     assert_eq!(value.display(), "transfer-rpcs-ok");
 }
 
+#[test]
+fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define mirror
+                    (make-map "actor" "did:ma:world#mirror-exit" "kind" "exit"
+                              "parent" "did:ma:world#room" "name" "mirror"
+                              "direction" "mirror"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#box" box
+                                                   "did:ma:world#mirror-exit" mirror)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#room")
+                                (equal? method "look"))
+                           last-room)
+                          ((and (equal? actor "did:ma:world#mirror-exit")
+                                (equal? method "traverse"))
+                           "blocked")
+                          (else ())))
+
+                (set! calls ())
+                (smoke "lock container with secret"
+                       (lambda () (lock "Box" "with" "supersecret")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#box" "lock" (list "supersecret")))))
+
+                (set! calls ())
+                (smoke "unlock container with secret"
+                       (lambda () (unlock "Box" "with" "supersecret")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#box" "unlock" (list "supersecret")))))
+
+                (set! calls ())
+                (smoke "lock exit with secret"
+                       (lambda () (lock "mirror" "with" "sesame")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#room" "exit"
+                                (list "mirror" "lock" "sesame")))))
+
+                (set! calls ())
+                (smoke "unlock exit" (lambda () (unlock "mirror")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#room" "exit"
+                                (list "mirror" "unlock")))))
+
+                (set! calls ())
+                (smoke "go with secret" (lambda () (go "mirror" "sesame")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#mirror-exit" "traverse"
+                                (list (make-map "did" "did:ma:me"
+                                                "parent" "did:ma:world#room")
+                                      "sesame")))))
+                "lock-rpcs-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "lock-rpcs-ok");
+}
+
 const EQUIP_SETUP: &str = r#"
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
@@ -1646,11 +1724,11 @@ fn production_forge_rejects_did_name() {
                 ; leading did:ma: as an address, so a name shaped like one is
                 ; unresolvable. Both bare and fragmented forms are rejected.
                 (assert (equal? (guard (e (#t "raised"))
-                                  (forge "thing" "named" "did:ma:world#lamp" "in" "did:ma:world#inventory")
+                                  (forge "thing" "named" "did:ma:world#lamp")
                                   "returned")
                                 "raised"))
                 (assert (equal? (guard (e (#t "raised"))
-                                  (forge "thing" "named" "did:ma:world" "in" "did:ma:world#inventory")
+                                  (forge "thing" "named" "did:ma:world")
                                   "returned")
                                 "raised"))
                 "forge-did-name-ok"
@@ -1659,6 +1737,66 @@ fn production_forge_rejects_did_name() {
 
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "forge-did-name-ok");
+}
+
+#[test]
+fn production_avatar_forge_targets_room_and_holds_the_created_thing() {
+    // forge has no `in <target>`: the creating room is asked to make the
+    // thing, the new actor is born with this avatar as parent, and its
+    // genesis :parent proposal books it into the avatar's hand — after the
+    // hand is cleared (drop-held-to-room!), exactly like take.
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (if (equal? method "forge")
+                      "did:ma:world#new-thing"
+                      ()))
+
+                (set! calls ())
+                ; First put a lamp in the hand, like a previous take.
+                (on-event ":parent"
+                           (list (make-map "actor" "did:ma:world#lamp"
+                                           "parent" "did:ma:me")))
+                (assert (equal? (entry-actor (car (hand-pool)))
+                                "did:ma:world#lamp"))
+
+                (set! calls ())
+                (forge "thing" "named" "Brass Lamp")
+                ; The held lamp is dropped to the room first so the hand slot
+                ; is ready, then the current room is asked to forge.
+                (assert (equal? calls
+                    (list (list "did:ma:world#room" "drop"
+                                (list "did:ma:world#lamp"))
+                          (list "did:ma:world#lamp" "set-parent"
+                                (list "did:ma:world#room"))
+                          (list "did:ma:world#room" "forge"
+                                (list (make-map "kind" "thing"
+                                                "name" "Brass Lamp"))))))
+
+                ; The forged actor's genesis proposes itself to the avatar;
+                ; the ordinary handshake books it as held.
+                (on-event ":parent"
+                           (list (make-map "actor" "did:ma:world#new-thing"
+                                           "parent" "did:ma:me")))
+                (assert (equal? (entry-actor (car (hand-pool)))
+                                "did:ma:world#new-thing"))
+                "forge-held-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "forge-held-ok");
 }
 
 #[test]

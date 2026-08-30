@@ -349,10 +349,14 @@
 ; completes the move. There is no single "move me" verb anywhere in the spec.
 ; The exit's `:traverse` takes a transient ctx map `{did, parent}` — the
 ; traveller's own bare DID and its current room — never a bare DID string.
-(define (go direction)
+; A locked exit admits a traveller who supplies the stored lock secret:
+; `go <direction> <secret>` passes it along as the second traverse argument.
+(define (go direction . secret-words)
   (let* ((exit (resolve-exit direction))
          (ctx (make-map "did" (#.my.identity.did) "parent" (room)))
-         (result (actor-call exit "traverse" ctx)))
+         (result (if (null? secret-words)
+                     (actor-call exit "traverse" ctx)
+                     (actor-call exit "traverse" ctx (join-words secret-words)))))
     (if (map? result)
       (let ((parent (map-ref result "parent" #f)))
         (if parent
@@ -385,24 +389,27 @@
       (error usage-text))
     (list before after)))
 
-(define forge-usage "usage: forge <kind> named <name...> [in <target...>]")
+(define forge-usage "usage: forge <kind> named <name...>")
 
 ; Direct child creation (ma-spec sec 7) — no avatar mediation on the runtime
-; side. The reply payload is either the new entity's DID-URL or a refusal
-; reason (e.g. an occupancy cap), so it's shown as-is, exactly like `owner`.
-; "named"/"in" are keywords, not data, so a multi-word name or target never
-; needs quoting: `forge lamp named Brass Lamp in Wardrobe`. Bare `forge kind
-; named name` defaults into your own inventory instead of a room/container.
+; side. The reply payload is the new entity's DID-URL. A forged entity is
+; always born into its forger's hand: the creating room sets parent to this
+; avatar, and the new actor's genesis announces itself (announce-node-parent!
+; in its init), so the ordinary :parent handshake books it as held here —
+; there is no `in <target>`, and a locked or closed container never enters the
+; picture. The hand is cleared first (drop-held-to-room!), exactly like take,
+; so the slot is ready when the forged thing's proposal arrives. "named" is a
+; keyword, not data, so a multi-word name never needs quoting:
+; `forge lamp named Brass Lamp`.
 (define (forge kind . rest)
   (if (or (null? rest) (not (equal? (car rest) "named")))
       (error forge-usage)
-      (let* ((s (split-command! (cdr rest) "in" forge-usage #f))
-             (name (join-words (car s)))
-             (target-words (cadr s))
-             (target (if target-words (join-words target-words) (or (my-inv-if-any) (room)))))
+      (let ((name (join-words (cdr rest))))
         (if (starts-with-did? name)
             (error "name must not be a DID or DID-URL")
-            (display (command target "forge" (make-map "kind" kind "name" name))))
+            (begin
+              (drop-held-to-room!)
+              (display (command (room) "forge" (make-map "kind" kind "name" name)))))
         nil)))
 
 (define (leave)
@@ -890,6 +897,32 @@
   (display (command name "owner?"))
   nil)
 
+;; ── Locking ─────────────────────────────────────────────────────────────────
+; lock/unlock are owner-gated at the actor, and `:lock <secret>` is the same
+; contract for containers and exits: the owner (or, for an exit, the room that
+; owns it) locks with an optional secret that lets a non-owner `unlock` — or,
+; for an exit, pass straight through with `go <direction> <secret>`. Exits
+; accept lock commands only from their source room, so the command routes
+; through the room's owner-gated `:exit <direction> <verb>` proxy using the
+; exit's direction; everything else is addressed directly.
+(define lock-usage "usage: lock <target...> [with <secret>]")
+(define unlock-usage "usage: unlock <target...> [with <secret>]")
+
+(define (lock-rpc! words usage verb)
+  (let* ((s (split-command! words "with" usage #f))
+         (target-words (car s))
+         (secret-words (cadr s))
+         (target (join-words target-words))
+         (entry (resolve-one-entry-fresh target default-pool))
+         (args (if secret-words (list (join-words secret-words)) ())))
+    (if (equal? (map-ref entry "kind" "") "exit")
+      (apply room-call "exit" (cons (map-ref entry "direction" "") (cons verb args)))
+      (display (apply actor-call (entry-actor entry) verb args)))
+    nil))
+
+(define (lock . words) (lock-rpc! words lock-usage "lock"))
+(define (unlock . words) (lock-rpc! words unlock-usage "unlock"))
+
 (define (recycle name)
   (command name "recycle")
   nil)
@@ -1002,7 +1035,7 @@
     (display (command (join-words rest) "help"))
     (display
       (string-append
-        "go <direction>          move through a named exit\n"
+        "go <direction> [secret]  move through a named exit (secret unlocks a locked one)\n"
         "help                    show this command list\n"
         "help <name>             show usage for something here or in your inventory\n"
         "look                    show the current room\n"
@@ -1034,11 +1067,13 @@
         "emote <text>            perform an emote\n"
         "claim <name>            claim ownership of something\n"
         "owner <name>            show who owns something\n"
+        "lock <target...> [with <secret>]  lock a container or room exit you own\n"
+        "unlock <target...> [with <secret>]  unlock as owner, or with the lock secret\n"
         "recycle <name>          destroy something you own\n"
         "remove <child...>       owner repairs a stale room child\n"
         "dig <direction>         create a new exit\n"
         "fill <direction>        remove an exit\n"
-        "forge <kind> named <name...> [in <target...>]  create it (default: your inventory)\n"
+        "forge <kind> named <name...>  create a new thing in your hand (drops current held item first)\n"
         "enter <target> <nick>   enter a room directly by address\n"
         "start-here              trigger the current room to cascade :here to its children\n"
         "leave                   leave the current room\n"
