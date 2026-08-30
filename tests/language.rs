@@ -699,17 +699,7 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
     assert_eq!(value.display(), "transfer-rpcs-ok");
 }
 
-#[test]
-fn production_avatar_equip_books_inventory_and_drops_old() {
-    let source = ["stdlib", "runtime", "avatar", "events"]
-        .into_iter()
-        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let source = format!(
-        r#"
-                {source}
-
+const EQUIP_SETUP: &str = r#"
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
                 (define box
@@ -737,7 +727,9 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                           ((equal? method "kind?") "/ma/container/0.0.1")
                           ((equal? method "contents?") ())
                           (else ())))
+"#;
 
+const EQUIP_BOX_PHASE: &str = r#"
                 ; equip from the room: the same :hold take uses, but the container
                 ; is booked into the inventory slot — only once :parent arrives.
                 (set! calls ())
@@ -755,7 +747,9 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                 (assert (null? (hand-pool)))
                 (assert (equal? (entry-actor (car (resolve-inventory-pool)))
                                 "did:ma:world#box"))
+"#;
 
+const EQUIP_SAME_PHASE: &str = r#"
                 ; re-equipping the same container is a deliberate no-op — no
                 ; re-hold or re-book — so a racing :parent re-proposal can
                 ; never churn the slot.
@@ -764,7 +758,9 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                 (assert (equal? calls ()))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
                 (assert (null? (hand-pool)))
+"#;
 
+const EQUIP_SECOND_PHASE: &str = r#"
                 ; a second equip first unequips the old inventory — it lands in
                 ; the hand — and the pick-up's make-room step then drops it to
                 ; the room, all before the new one's :child ack arrives.
@@ -796,7 +792,9 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                     (assert (equal? (cadddr r)
                         (list "did:ma:world#room" "drop"
                             (list "did:ma:world#box")))))
+"#;
 
+const EQUIP_REFUSAL_PHASE: &str = r#"
                 ; equipping a non-container is refused before any :hold.
                 (set! calls ())
                 (guard (e ((string-contains e "invalid inventory kind") #t)
@@ -812,9 +810,19 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                     (inv "Box")
                     (error "inv did not refuse"))
                 "equip-slot-ok"
-        "#
-    );
+"#;
 
+#[test]
+fn production_avatar_equip_books_inventory_and_drops_old() {
+    let libs = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        "{libs}\n{EQUIP_SETUP}\n{EQUIP_BOX_PHASE}\n{EQUIP_SAME_PHASE}\n\
+         {EQUIP_SECOND_PHASE}\n{EQUIP_REFUSAL_PHASE}"
+    );
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "equip-slot-ok");
 }
@@ -1091,17 +1099,7 @@ fn production_avatar_take_from_equipped_inventory_never_drops_it() {
     assert_eq!(value.display(), "equip-take-from-safe");
 }
 
-#[test]
-fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
-    let source = ["stdlib", "runtime", "avatar", "events"]
-        .into_iter()
-        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let source = format!(
-        r#"
-                {source}
-
+const DROP_SETUP: &str = r#"
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
                 (#.my.ctx.inv: "did:ma:world#vadsaek")
@@ -1156,7 +1154,9 @@ fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
                           ((and (equal? actor "did:ma:world#kiste")
                                 (equal? method "take")) "take-id-2")
                           (else ())))
+"#;
 
+const DROP_NESTED_PHASE: &str = r#"
                 ; `drop fakkel from bag` resolves the bag as a container packed
                 ; inside the equipped vadsæk and sends the ordinary :take.
                 (set! calls ())
@@ -1192,7 +1192,9 @@ fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
                        (lambda () (drop "Fakkel")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#bag" "take" (list "did:ma:world#fakkel"))))
+"#;
 
+const DROP_SOURCES_PHASE: &str = r#"
                 ; `drop mønt from kiste` works when the source container is in
                 ; the room — the same reachability take-from already offers.
                 (set! calls ())
@@ -1215,7 +1217,9 @@ fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
                        (lambda () (drop "Mynt")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#vadsaek" "take" (list "did:ma:world#mynt"))))
+"#;
 
+const DROP_GUARDS_PHASE: &str = r#"
                 ; a room child is never a drop target: it is already down.
                 (guard (failure
                             ((string-contains failure "no match for") "room-item-safe")
@@ -1251,9 +1255,19 @@ fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
                                        (list "did:ma:world#room")) calls))
                 (assert (equal? (my-inv-if-any) #f))
                 "drop-nested-ok"
-        "#
-    );
+"#;
 
+#[test]
+fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
+    let libs = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        "{libs}\n{DROP_SETUP}\n{DROP_NESTED_PHASE}\n{DROP_SOURCES_PHASE}\n\
+         {DROP_GUARDS_PHASE}"
+    );
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "drop-nested-ok");
 }
