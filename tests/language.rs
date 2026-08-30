@@ -1581,7 +1581,7 @@ fn production_avatar_recycle_routes_to_owned_actor() {
 
                 ; recycle an object inside a container.
                 (set! calls ())
-                (smoke "recycle-from" (lambda () (recycle-from "Box" "Coin")))
+                (smoke "recycle in container" (lambda () (recycle "Coin" "in" "Box")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#coin" "recycle" ())))
                 "recycle-ok"

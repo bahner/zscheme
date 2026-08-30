@@ -812,11 +812,31 @@
 (define (put-in . words)
   (apply put words))
 
-(define (recycle-from container name)
-  (with-action-context (string-append "could not recycle " name " from " container)
-    (lambda ()
-      (command (resolve-in-container name (resolve-one container)) "recycle")
-      nil)))
+(define recycle-usage "usage: recycle <object...> [in <container...>]")
+
+; Destroy an owned thing, agent, or container — directly when it is here, or
+; inside a named container via that container's own contents. `in` is a hard
+; separator so a multi-word object description needs no quoting, exactly like
+; put/take; without it the object resolves against the usual room + inventory
+; pool. The actor's own :recycle gate still requires the caller to be the
+; owner.
+(define (recycle . words)
+  (let* ((s (split-command! words "in" recycle-usage #f))
+         (object-words (car s))
+         (container-words (cadr s)))
+    (if container-words
+      (with-action-context
+        (string-append "could not recycle " (join-words object-words) " in " (join-words container-words))
+        (lambda ()
+          (let* ((container (resolve-one (join-words container-words)))
+                 (object (resolve-in-container (join-words object-words) container)))
+            (command object "recycle")
+            nil)))
+      (with-action-context
+        (string-append "could not recycle " (join-words object-words))
+        (lambda ()
+          (command (join-words object-words) "recycle")
+          nil)))))
 
 ; A roll-call is node policy; this is only the human spelling of it. The phase
 ; and its optional timeout are peeled off the END so a multi-word object needs
@@ -926,10 +946,6 @@
 
 (define (lock . words) (lock-rpc! words lock-usage "lock"))
 (define (unlock . words) (lock-rpc! words unlock-usage "unlock"))
-
-(define (recycle name)
-  (command name "recycle")
-  nil)
 
 ; Room ownership decides whether this repair is authorised. The target stays
 ; unresolved here so the room can match every current child, including a
@@ -1070,7 +1086,7 @@
         "drop <item>             drop by name (held, or from your inventory)\n"
         "drop <item> from <container>  take it out of a container and drop it here\n"
         "put <item...> in <container...>  put something into a container\n"
-        "recycle-from <container> <name>  destroy something inside a container that you own\n"
+        "recycle <object...> [in <container...>]  destroy something you own, inside a container if named\n"
         "roll-call [<target...>] [begin [secs]|end]  recount a node's children\n"
         "inv                     show what you're holding and what your equipped container holds\n"
         "prop <target> <key> [value...]  set a named prop on any actor\n"
@@ -1083,7 +1099,6 @@
         "owner <name>            show who owns something\n"
         "lock <target...> [with <secret>]  lock a container or room exit you own\n"
         "unlock <target...> [with <secret>]  unlock as owner, or with the lock secret\n"
-        "recycle <name>          destroy something you own\n"
         "remove <child...>       owner repairs a stale room child\n"
         "dig <direction>         create a new exit\n"
         "fill <direction>        remove an exit\n"
