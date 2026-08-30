@@ -21,23 +21,15 @@
 (define (actor-call actor method . args)
   (apply (string-append actor ":" method) args))
 
-;; ok? — was the call a success? True for the bare :ok ack and the
-;; (:ok payload) tuple alike; payload extraction is ok-reply's job. This
-;; widens the evaluator's builtin ok?, which only recognises the (:ok …)
-;; tuple, so rpc-send/msg-send results and the actor-call path agree.
+;; Reply-shape predicates. ok? is the bare :ok ack (success, no payload);
+;; ok-reply? is the (:ok payload) tuple (success carrying a payload). The
+;; payload itself is plain (cdr reply). These mirror the ma-zscheme builtins
+;; of the same names and may be dropped once a release ships them.
 (define (ok? reply)
-  (or (equal? reply ":ok")
-      (and (pair? reply) (equal? (car reply) ":ok"))))
+  (equal? reply ":ok"))
 
-;; ok-reply — the payload of an ok reply, given (ok? reply): the :ok head is
-;; implicit once success is confirmed. (:ok payload) → payload; the bare :ok
-;; ack has no payload → nil.
-(define (ok-reply reply)
-  (if (and (pair? reply)
-           (equal? (car reply) ":ok")
-           (not (null? (cdr reply))))
-      (cadr reply)
-      ()))
+(define (ok-reply? reply)
+  (and (pair? reply) (equal? (car reply) ":ok")))
 
 ; `#root` is the direct-DID profile's fixed local trust anchor. Unlike
 ; optional runtime services, its address needs no service-directory lookup.

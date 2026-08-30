@@ -895,7 +895,7 @@
                         object " " token)))
         (actor-call object "set-recovery-secret" token)
         (let ((sent (msg-send recipient message)))
-          (if (ok? sent) nil (error (err-msg sent))))))))
+          (if (ok-reply? sent) nil (error (err-msg sent))))))))
 
 (define (owner name)
   (display (command name "owner?"))
@@ -949,12 +949,13 @@
 ; set-cmd-method!/reply-error decides whether to comply or refuse — tell only
 ; resolves and relays, exactly like owner/claim do for their one dedicated verb.
 
-; Show the payload of a forwarded-verb reply. actor-call returns payloads
-; raw and the bare :ok ack as ":ok"; rpc-send returns (:ok payload). Either
-; way, normalise to the payload and show it only when there is one — a bare
-; :ok ack has none.
+; Show the payload of a forwarded-verb reply. A bare :ok ack has none; an
+; (:ok payload) tuple's payload is its cdr; actor-call returns payloads raw.
+; Show only when there is something to show.
 (define (display-reply reply)
-  (let ((payload (if (ok? reply) (ok-reply reply) reply)))
+  (let ((payload (cond ((ok? reply) ())
+                       ((ok-reply? reply) (cdr reply))
+                       (else reply))))
     (unless (null? payload) (display payload)))
   reply)
 

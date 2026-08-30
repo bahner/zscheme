@@ -407,7 +407,7 @@ fn production_runtime_resolves_ctx_references() {
 }
 
 #[test]
-fn production_runtime_ok_predicate_and_reply_extractor() {
+fn production_runtime_ok_predicates_distinguish_ack_from_reply() {
     let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
     let runtime = fs::read_to_string("lib/runtime.zscheme").unwrap();
     let source = format!(
@@ -415,21 +415,24 @@ fn production_runtime_ok_predicate_and_reply_extractor() {
         {stdlib}
         {runtime}
 
-        ; ok? is true for the bare :ok ack and the (:ok payload) tuple alike.
+        ; ok? is the bare :ok ack only.
         (assert (ok? ":ok"))
-        (assert (ok? (list ":ok" "prop updated")))
+        (assert (not (ok? (list ":ok" "prop updated"))))
         (assert (not (ok? "prop updated")))
-        (assert (not (ok? (list ":error" "nope"))))
 
-        ; ok-reply returns the payload; the bare :ok ack has none.
-        (assert (equal? (ok-reply (list ":ok" "prop updated")) "prop updated"))
-        (assert (null? (ok-reply ":ok")))
-        "ok-reply-ok"
+        ; ok-reply? is the (:ok payload) tuple only.
+        (assert (ok-reply? (list ":ok" "prop updated")))
+        (assert (not (ok-reply? ":ok")))
+        (assert (not (ok-reply? (list ":error" "nope"))))
+
+        ; The payload is plain cdr.
+        (assert (equal? (cdr (list ":ok" "prop updated")) (list "prop updated")))
+        "ok-predicates-ok"
         "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "ok-reply-ok");
+    assert_eq!(value.display(), "ok-predicates-ok");
 }
 
 #[test]

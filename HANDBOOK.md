@@ -101,7 +101,7 @@ When a config lookup returns a DID, you can use it as a function:
 
 ```scheme
 (define result (rpc-send "@sky#room" ":look"))
-(if (ok? result)
+(if (ok-reply? result)
   (display (ok-val result))
     (error (err-msg result)))
 ```
@@ -240,7 +240,7 @@ Store a navigation script (see [`lib/stdlib.zscheme`](lib/stdlib.zscheme) for `s
                             "nick" alias
                             "description" "A zscheme user."))
          (result  (rpc-send target ":enter" ctx)))
-    (if (ok? result)
+    (if (ok-reply? result)
         (begin (use target) (ok-val result))
         (error (err-msg result)))))
 ```
@@ -280,7 +280,7 @@ Use `rpc-send` when you need to handle errors gracefully:
 ```scheme
 (define (safe-ping target)
   (let ((r (rpc-send target ":ping")))
-    (if (ok? r) "online" "offline")))
+    (if (ok-reply? r) "online" "offline")))
 
 (safe-ping "@sky")   ; → "online" or "offline"
 ```

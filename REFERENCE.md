@@ -427,12 +427,15 @@ Sends an emote message.
 ## 8. Reply tuple helpers
 
 Reply tuples are lists whose first element is a keyword string: `":ok"`,
-`":error"`, or `":timeout"`.
+`":error"`, or `":timeout"`. `ok?` is the bare `:ok` ack (success with no
+payload); `ok-reply?` is the `(:ok value)` tuple (success carrying a
+payload — take it with plain `(cdr reply)`).
 
 | Function | Description |
 |---|---|
-| `(ok? reply)` | True if `(car reply)` is `":ok"` |
-| `(err? reply)` | True if `(car reply)` is `":error"` |
+| `(ok? reply)` | True only for the bare `":ok"` ack |
+| `(ok-reply? reply)` | True for an `(:ok value)` tuple |
+| `(err? reply)` | True only for the bare `":error"` |
 | `(ok-val reply)` | Second element of `(:ok value)` |
 | `(err-msg reply)` | Second element of `(:error reason)` |
 

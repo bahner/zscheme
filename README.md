@@ -104,7 +104,7 @@ archive is sent to that remote pinning service.
 
 ; rpc-send — returns a raw (:ok …) / (:error …) tuple:
 (rpc-send "@sky#room" ":look")       ; → (:ok "You are in a quiet room.")
-(ok? (rpc-send "@sky#ping" ":ping"))      ; → #t
+(ok-reply? (rpc-send "@sky#ping" ":ping"))      ; → #t
 ```
 
 ### Entering a world
