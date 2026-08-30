@@ -21,11 +21,23 @@
 (define (actor-call actor method . args)
   (apply (string-append actor ":" method) args))
 
-;; A bare :ok ack — or an empty reply — is a success signal with no payload:
-;; nothing worth showing. Every verb-forwarding command shares this test so
-;; the ack is never conflated with a payload (or with Nil/()).
-(define (ack? reply)
-  (or (null? reply) (equal? reply ":ok")))
+;; ok? — was the call a success? True for the bare :ok ack and the
+;; (:ok payload) tuple alike; payload extraction is ok-reply's job. This
+;; widens the evaluator's builtin ok?, which only recognises the (:ok …)
+;; tuple, so rpc-send/msg-send results and the actor-call path agree.
+(define (ok? reply)
+  (or (equal? reply ":ok")
+      (and (pair? reply) (equal? (car reply) ":ok"))))
+
+;; ok-reply — the payload of an ok reply, given (ok? reply): the :ok head is
+;; implicit once success is confirmed. (:ok payload) → payload; the bare :ok
+;; ack has no payload → nil.
+(define (ok-reply reply)
+  (if (and (pair? reply)
+           (equal? (car reply) ":ok")
+           (not (null? (cdr reply))))
+      (cadr reply)
+      ()))
 
 ; `#root` is the direct-DID profile's fixed local trust anchor. Unlike
 ; optional runtime services, its address needs no service-directory lookup.

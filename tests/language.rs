@@ -407,7 +407,7 @@ fn production_runtime_resolves_ctx_references() {
 }
 
 #[test]
-fn production_runtime_ack_predicate_distinguishes_bare_ok_ack() {
+fn production_runtime_ok_predicate_and_reply_extractor() {
     let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
     let runtime = fs::read_to_string("lib/runtime.zscheme").unwrap();
     let source = format!(
@@ -415,18 +415,21 @@ fn production_runtime_ack_predicate_distinguishes_bare_ok_ack() {
         {stdlib}
         {runtime}
 
-        ; The bare :ok ack and empty replies carry no payload.
-        (assert (ack? ":ok"))
-        (assert (ack? ()))
-        ; Payload replies — including the [:ok payload] tuple — do.
-        (assert (not (ack? "prop updated")))
-        (assert (not (ack? (list ":ok" "prop updated"))))
-        "ack-predicate-ok"
+        ; ok? is true for the bare :ok ack and the (:ok payload) tuple alike.
+        (assert (ok? ":ok"))
+        (assert (ok? (list ":ok" "prop updated")))
+        (assert (not (ok? "prop updated")))
+        (assert (not (ok? (list ":error" "nope"))))
+
+        ; ok-reply returns the payload; the bare :ok ack has none.
+        (assert (equal? (ok-reply (list ":ok" "prop updated")) "prop updated"))
+        (assert (null? (ok-reply ":ok")))
+        "ok-reply-ok"
         "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "ack-predicate-ok");
+    assert_eq!(value.display(), "ok-reply-ok");
 }
 
 #[test]
