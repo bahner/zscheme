@@ -41,22 +41,26 @@
 
 (define (candidate-location entry)
   (let* ((parent (map-ref entry "parent" #f))
-         (parent-entry (and (string? parent) (find-entry-by-actor (location-lookup-pool) parent))))
-    (cond ((map? parent-entry)
-           (let ((parent-name (map-ref parent-entry "name" #f)))
-             (if (and (string? parent-name) (not (equal? parent-name "")))
-               parent-name
-               #f)))
-          ((and (string? parent) (my-inv-if-any) (equal? parent (my-inv-if-any)))
-           "inventory")
-          ((and (string? parent)
-                (map? last-room)
-                (equal? parent (map-ref last-room "actor" #f)))
-           (let ((room-name (map-ref last-room "name" #f)))
-             (if (and (string? room-name) (not (equal? room-name "")))
-               room-name
-               #f)))
-          (else #f))))
+         (parent-entry (and (string? parent) (find-entry-by-actor (location-lookup-pool) parent)))
+         (parent-name (and (map? parent-entry) (map-ref parent-entry "name" #f))))
+    (cond
+      ((and (string? parent-name)
+            (not (equal? parent-name ""))
+            ; node-name falls back to the actor's own DID-URL for unnamed
+            ; nodes; that is no name at all, so fall through to the
+            ; "inventory" label instead of printing a bare DID.
+            (not (equal? parent-name (entry-actor parent-entry))))
+       parent-name)
+      ((and (string? parent) (my-inv-if-any) (equal? parent (my-inv-if-any)))
+       "inventory")
+      ((and (string? parent)
+            (map? last-room)
+            (equal? parent (map-ref last-room "actor" #f)))
+       (let ((room-name (map-ref last-room "name" #f)))
+         (if (and (string? room-name) (not (equal? room-name "")))
+           room-name
+           #f)))
+      (else #f))))
 
 (define (describe-candidate entry)
   (let ((nick (map-ref entry "nick" #f))
@@ -137,8 +141,9 @@
 ; The inventory container itself is a resolvable candidate beside its contents,
 ; so `equip chest from vadsæk` / `take coin from vadsæk` work when the source
 ; is your own carried inventory. `inv-entry` is the ctx cached when the
-; container was booked; after a reload only the DID is known, so `from inv`
-; (or the bare DID) stays the reliable spelling.
+; container was booked; after a reload only the DID is known, so the
+; container's own :name answers for it (inventory-display-ctx) and the bare
+; DID stays the reliable spelling when even that fails.
 (define inv-entry #f)
 
 (define (resolve-inventory-pool)
@@ -147,7 +152,7 @@
       (let ((contents (guard (e (#t ())) (container-contents inv))))
         (if (and (map? inv-entry) (equal? (entry-actor inv-entry) inv))
           (cons inv-entry contents)
-          contents))
+          (cons (inventory-display-ctx inv) contents)))
       ())))
 
 (define held-item #f)
@@ -307,6 +312,20 @@
           #f))
       #f)))
 
+; After a reload only the inventory DID is known — the ctx snapshot is cached
+; in memory at booking time, and only the DID is persisted. Every node answers
+; the generic :name RPC, so the container itself supplies the display name; a
+; synthetic ctx naming the DID is the final fallback when it can't answer. The
+; generic getter reports "(none)" for an unnamed actor, which is no better than
+; the DID — treat it as missing.
+(define (inventory-display-ctx inventory)
+  (let ((name (guard (e (#t #f)) (actor-call inventory "name"))))
+    (if (and (string? name)
+             (not (equal? name ""))
+             (not (equal? name "(none)")))
+      (make-map "actor" inventory "name" name)
+      (make-map "actor" inventory "name" inventory))))
+
       ;; ── World-building and movement verbs ──────────────────────────────────────
       ;;
       ;; Everything below is intentionally thin. Resolve locally, make one ordinary
@@ -414,13 +433,23 @@
        (when (and held-item (equal? actor (entry-actor held-item)))
          (held-clear!))
        (book-inventory! actor ctx))
+      ; A take-then-drop item (`drop <item> from <container>`): acknowledge
+      ; the hold proposal so the item commits to us — the ordinary prerequisite
+      ; for the avatar to be authorised to relocate it — then immediately drop
+      ; it to the room.
+      ((and (equal? parent self) (map-ref drop-pending actor #f))
+       (set! drop-pending (map-delete drop-pending actor))
+       (actor-call actor "child" ctx)
+       (drop-target-to-room! actor))
       ((equal? parent self)
        (actor-call actor "child" ctx)
        ; The equipped inventory container may re-propose (e.g. a repeated
        ; :hold racing its booking); it belongs in the inventory slot, never
        ; the hand slot — a held slot pointing at it would make the next take
-       ; drop it to the room.
-       (unless (equal? actor (my-inv-if-any))
+       ; drop it to the room. A re-proposal also refreshes the cached ctx so
+       ; inv-entry never goes stale while the container stays equipped.
+       (if (equal? actor (my-inv-if-any))
+         (set! inv-entry ctx)
          (held-add! ctx)))
       ; The old parent's own confirmation that a committed transfer actually
       ; happened (node.ma's commit-node-parent!) — the only trustworthy signal
@@ -593,31 +622,88 @@
           (when (string? id) (pending-store! id)))
         nil))))
 
+; Drop's search space: what you're holding, everything in the equipped
+; inventory, and the contents of the containers inside that inventory — one
+; nesting level, enough to reach a bag packed inside the rucksack.
+(define (drop-pool)
+  (let ((inventory (resolve-inventory-pool)))
+    (if (null? inventory)
+      (hand-pool)
+      (append (hand-pool)
+              (append inventory
+                      (flatten-list
+                        (map (lambda (entry)
+                               (guard (e (#t ()))
+                                 (container-contents (entry-actor entry))))
+                             (cdr inventory))))))))
+
+; The source container in `drop <item> from <container>` has the same
+; reachability take-from already offers — the room, your hand, the equipped
+; inventory and the containers packed inside it.
+(define (drop-container-pool)
+  (append (resolve-room-pool) (drop-pool)))
+
+; Room-relocate an actor the avatar is already parent to: the room :drop
+; capacity pre-check, then the ordinary :set-parent relocation every drop
+; path uses. Dropping the equipped inventory container also unbooks it.
+(define (drop-target-to-room! target)
+  (actor-call (room) "drop" target)
+  (actor-call target "set-parent" (room))
+  (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:)))
+
+; `drop <item> [from <container>]` whose item lives inside a container is
+; take-then-drop: the item leaves through the container's own :take gate,
+; and when its :parent proposal arrives (handle-avatar-parent!) it is
+; acknowledged and immediately relocated to the room. drop-pending is keyed
+; by item DID so that handshake can recognise the item; the command boundary
+; clears the entry if the gate refuses, so a stale entry can never hijack a
+; later, unrelated proposal.
+(define drop-pending (make-map))
+
+(define (take-then-drop! container item)
+  (set! drop-pending (map-set drop-pending item #t))
+  (guard (e (#t (set! drop-pending (map-delete drop-pending item)) (error e)))
+    (let ((id (actor-call container "take" item)))
+      (when (string? id) (pending-store! id)))))
+
+(define drop-usage "usage: drop [<item...>] [from <container...>]")
+
+; Drop by name: the item may be held, inside the equipped inventory, or
+; inside a container packed in that inventory. Held items drop directly;
+; inventory items go through their container's :take gate and then drop to
+; the room (take-then-drop!).
 (define (drop . rest)
   (if (null? rest)
     (if (not held-item)
       (error "you're not holding anything")
       (with-action-context "could not drop it"
         (lambda ()
-          (let ((target (entry-actor held-item)))
-            (actor-call (room) "drop" target)
-            (actor-call target "set-parent" (room))
-            (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
-            nil))))
-    (let ((name (join-words rest)))
-      (if (not held-item)
-        (error "you're not holding anything")
-        (let* ((target (entry-actor held-item))
-               (matched? (guard (e (#t #f))
-                           (equal? target (resolve-in-given-pool name (hand-pool))))))
-          (if (not matched?)
-            (error (string-append "you're not holding " name))
-            (with-action-context (string-append "could not drop " name)
-              (lambda ()
-                (actor-call (room) "drop" target)
-                (actor-call target "set-parent" (room))
-                (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:))
-                nil))))))))
+          (drop-target-to-room! (entry-actor held-item))
+          nil)))
+    (let* ((s (split-command! rest "from" drop-usage #f))
+           (item-words (car s))
+           (container-words (cadr s)))
+      (if container-words
+        (with-action-context
+          (string-append "could not drop " (join-words item-words) " from " (join-words container-words))
+          (lambda ()
+            (let* ((container (resolve-one-entry-fresh (join-words container-words) drop-container-pool))
+                   (item (resolve-in-container (join-words item-words) (entry-actor container))))
+              (take-then-drop! (entry-actor container) item)
+              nil)))
+        (with-action-context
+          (string-append "could not drop " (join-words item-words))
+          (lambda ()
+            (let* ((entry (resolve-one-entry-fresh (join-words item-words) drop-pool))
+                   (target (entry-actor entry)))
+              (cond ((and held-item (equal? target (entry-actor held-item)))
+                     (drop-target-to-room! target))
+                    ((equal? target (my-inv-if-any))
+                     (drop-target-to-room! target))
+                    ((string? (map-ref entry "parent" #f))
+                     (take-then-drop! (map-ref entry "parent") target))
+                    (else (error (string-append "you're not holding " (join-words item-words)))))
+              nil)))))))
 
   ;; ── Direct object verbs ─────────────────────────────────────────────────────
 
@@ -834,13 +920,13 @@
     (let* ((inventory (my-inv-if-any))
            (contents (guard (e (#t ()))
                       (if inventory (container-contents inventory) ())))
-           ; the cached ctx supplies the container's name when it still matches
+           ; the cached ctx supplies the container's name while it still matches
            ; the configured inventory; after a reload only the DID is known, so
-           ; the bare DID is shown instead.
+           ; the container's own :name answers it (inventory-display-ctx).
            (container (if (and inventory (map? inv-entry)
                                (equal? (entry-actor inv-entry) inventory))
                           inv-entry
-                          inventory)))
+                          (if inventory (inventory-display-ctx inventory) inventory))))
       (event-inventory (hand-pool) container contents)
       nil)))
 
@@ -869,7 +955,8 @@
         "keep [<item>]           make the held container your inventory\n"
         "find <did>              take a hidden object by DID if it's here, on you, or in your inventory\n"
         "drop                    drop what you're holding\n"
-        "drop <item>             drop by name (error if you're not holding it)\n"
+        "drop <item>             drop by name (held, or from your inventory)\n"
+        "drop <item> from <container>  take it out of a container and drop it here\n"
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
         "roll-call [<target...>] [begin [secs]|end]  recount a node's children\n"

@@ -196,6 +196,67 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
 }
 
 #[test]
+fn production_child_ctx_events_update_one_key_and_child_acks_replace_snapshot() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (define alice
+                    (make-map "actor" "did:ma:alice" "kind" "agent" "name" "Alice"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing" "name" "Lamp" "nick" "Lamp"))
+                (remember-room!
+                    (make-map "actor" "did:ma:world#room" "kind" "room" "name" "Room"
+                              "children" (make-map "did:ma:alice" alice
+                                                   "did:ma:world#lamp" lamp)))
+
+                ; A single child-ctx update refreshes exactly that child's key.
+                (on-event ":child-ctx" (list (map-set lamp "nick" "Bag")))
+                (assert (= (length (room-child-pool last-room)) 2))
+                (assert (equal?
+                    (map-ref (find-entry-by-actor (room-child-pool last-room)
+                                                  "did:ma:world#lamp")
+                             "nick" "")
+                    "Bag"))
+                (assert (equal?
+                    (map-ref (find-entry-by-actor (room-child-pool last-room)
+                                                  "did:ma:alice")
+                             "name" "")
+                    "Alice"))
+
+                ; A room :child ack replaces the whole cached snapshot from the
+                ; nested parent-ctx (e.g. after a roll-call rebuilds the list).
+                (define rebuilt
+                    (make-map "actor" "did:ma:world#room" "kind" "room" "name" "Fresh"
+                              "children" (make-map "did:ma:world#lamp"
+                                                   (map-set lamp "nick" "Bag"))))
+                (on-event ":child"
+                           (list (map-set (make-map "actor" "did:ma:me") "parent-ctx" rebuilt)))
+                (assert (equal? (map entry-actor (room-child-pool last-room))
+                                (list "did:ma:world#lamp")))
+                (assert (equal? (map-ref last-room "name" "") "Fresh"))
+
+                ; A :child whose ctx carries no room parent-ctx is ignored.
+                (remember-room!
+                    (make-map "actor" "did:ma:world#room" "kind" "room" "name" "Room"
+                              "children" (make-map "did:ma:alice" alice
+                                                   "did:ma:world#lamp" lamp)))
+                (on-event ":child" (list (make-map "actor" "did:ma:world#lamp" "parent" "did:ma:me")))
+                (assert (= (length (room-child-pool last-room)) 2))
+                "child-ctx-events-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "child-ctx-events-ok");
+}
+
+#[test]
 fn production_speech_events_take_a_context_and_text() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
@@ -1010,6 +1071,173 @@ fn production_avatar_take_from_equipped_inventory_never_drops_it() {
 }
 
 #[test]
+fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.inv: "did:ma:world#vadsaek")
+                (define vadsaek
+                    (make-map "actor" "did:ma:world#vadsaek" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Vadsæk"))
+                (define bag
+                    (make-map "actor" "did:ma:world#bag" "kind" "container"
+                              "parent" "did:ma:world#vadsaek" "name" "Bag"))
+                (define fakkel
+                    (make-map "actor" "did:ma:world#fakkel" "kind" "thing"
+                              "parent" "did:ma:world#bag" "name" "Fakkel"))
+                (define mynt
+                    (make-map "actor" "did:ma:world#mynt" "kind" "thing"
+                              "parent" "did:ma:world#vadsaek" "name" "Mynt"))
+                (define kiste
+                    (make-map "actor" "did:ma:world#kiste" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Kiste"))
+                (define moent
+                    (make-map "actor" "did:ma:world#moent" "kind" "thing"
+                              "parent" "did:ma:world#kiste" "name" "Mønt"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#vadsaek" vadsaek
+                                                   "did:ma:world#kiste" kiste
+                                                   "did:ma:world#lamp" lamp)))
+                (define calls ())
+                (define refuse-take #f)
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "kind?")) "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "name")) "Vadsæk")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) (list bag mynt))
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "take")) "take-id-3")
+                          ((and (equal? actor "did:ma:world#bag")
+                                (equal? method "contents?")) (list fakkel))
+                          ((and (equal? actor "did:ma:world#bag")
+                                (equal? method "take"))
+                           (if refuse-take (error "locked") "take-id-1"))
+                          ((and (equal? actor "did:ma:world#kiste")
+                                (equal? method "contents?")) (list moent))
+                          ((and (equal? actor "did:ma:world#kiste")
+                                (equal? method "take")) "take-id-2")
+                          (else ())))
+
+                ; `drop fakkel from bag` resolves the bag as a container packed
+                ; inside the equipped vadsæk and sends the ordinary :take.
+                (set! calls ())
+                (smoke "drop from nested"
+                       (lambda () (drop "Fakkel" "from" "Bag")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#bag" "take" (list "did:ma:world#fakkel"))))
+                (assert (map-ref drop-pending "did:ma:world#fakkel" #f))
+                (assert (null? (hand-pool)))
+
+                ; when the item's :parent proposal arrives it is acknowledged,
+                ; then relocated to the room — never held.
+                (set! calls ())
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#fakkel"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Fakkel")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#fakkel" "child"
+                                (list (make-map "actor" "did:ma:world#fakkel"
+                                                "parent" "did:ma:me"
+                                                "name" "Fakkel")))
+                          (list "did:ma:world#room" "drop"
+                                (list "did:ma:world#fakkel"))
+                          (list "did:ma:world#fakkel" "set-parent"
+                                (list "did:ma:world#room")))))
+                (assert (equal? drop-pending (make-map)))
+                (assert (null? (hand-pool)))
+
+                ; `drop fakkel` without `from` reaches the same nested item
+                ; through the nested inventory pool and the same :take gate.
+                (set! calls ())
+                (smoke "drop nested by name"
+                       (lambda () (drop "Fakkel")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#bag" "take" (list "did:ma:world#fakkel"))))
+
+                ; `drop mønt from kiste` works when the source container is in
+                ; the room — the same reachability take-from already offers.
+                (set! calls ())
+                (smoke "drop from room container"
+                       (lambda () (drop "Mønt" "from" "Kiste")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#kiste" "take" (list "did:ma:world#moent"))))
+                (assert (map-ref drop-pending "did:ma:world#moent" #f))
+
+                ; the equipped inventory container itself is a drop source:
+                ; `drop mynt from vadsæk` and plain `drop mynt` both route
+                ; through vadsæk's own :take gate.
+                (set! calls ())
+                (smoke "drop from equipped inventory"
+                       (lambda () (drop "Mynt" "from" "Vadsæk")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#vadsaek" "take" (list "did:ma:world#mynt"))))
+                (set! calls ())
+                (smoke "drop direct inventory child"
+                       (lambda () (drop "Mynt")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#vadsaek" "take" (list "did:ma:world#mynt"))))
+
+                ; a room child is never a drop target: it is already down.
+                (guard (failure
+                            ((string-contains failure "no match for") "room-item-safe")
+                            (#t (error failure)))
+                    (drop "Lamp"))
+
+                ; dropping nothing while the hand is empty stays an error.
+                (set! held-item #f)
+                (guard (failure
+                            ((string-contains failure "you're not holding anything") "empty-hand-safe")
+                            (#t (error failure)))
+                    (drop))
+
+                ; a refused :take clears the pending drop instead of leaving a
+                ; stale entry that could hijack a later proposal.
+                (set! drop-pending (make-map))
+                (set! refuse-take #t)
+                (set! calls ())
+                (guard (failure
+                            ((string-contains failure "could not drop Fakkel from Bag") "refusal-ok")
+                            (#t (error failure)))
+                    (drop "Fakkel" "from" "Bag"))
+                (assert (equal? drop-pending (make-map)))
+
+                ; dropping the equipped container itself by name is the user's
+                ; choice and unbooks the inventory pointer.
+                (set! calls ())
+                (smoke "drop equipped container"
+                       (lambda () (drop "Vadsæk")))
+                (assert (member? (list "did:ma:world#room" "drop"
+                                       (list "did:ma:world#vadsaek")) calls))
+                (assert (member? (list "did:ma:world#vadsaek" "set-parent"
+                                       (list "did:ma:world#room")) calls))
+                (assert (equal? (my-inv-if-any) #f))
+                "drop-nested-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "drop-nested-ok");
+}
+
+#[test]
 fn production_avatar_equip_keeps_unrelated_held_item() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
@@ -1666,6 +1894,116 @@ fn production_avatar_inv_renders_held_and_equipped_separately() {
          holding nothing\nthe equipped Vadsæk contains nothing\n\
          holding nothing\n"
     );
+}
+
+#[test]
+fn production_avatar_inv_restores_name_after_reload() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                ; a reload persists only the inventory DID; the cached ctx
+                ; snapshot (inv-entry) is gone.
+                (#.my.ctx.inv: "did:ma:world#vadsaek")
+                (define bag
+                    (make-map "actor" "did:ma:world#bag" "kind" "thing"
+                              "parent" "did:ma:world#vadsaek" "name" "Bag"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map)))
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "kind?")) "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "name")) "Vadsæk")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) (list bag))
+                          (else #f)))
+
+                ; the view asks the container for its name instead of printing
+                ; the bare DID.
+                (inv)
+                ; the resolver can match the equipped container by name again.
+                (assert (equal? (resolve-one "vadsæk") "did:ma:world#vadsaek"))
+                (assert (member? (list "did:ma:world#vadsaek" "name" ()) calls))
+
+                ; a container that can't answer keeps the DID as last resort.
+                (#.my.ctx.inv: "did:ma:world#silent")
+                (inv)
+                "inv-reload-ok"
+        "#
+    );
+
+    let (value, test_ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "inv-reload-ok");
+    assert_eq!(
+        test_ctx.output.borrow().as_str(),
+        "holding nothing\nthe equipped Vadsæk contains Bag\n\
+         holding nothing\nthe equipped did:ma:world#silent contains nothing\n"
+    );
+}
+
+#[test]
+fn production_avatar_put_into_equipped_inventory_resolves_container_after_reload() {
+    // The reported bug: `put bag in vadsæk` failed with "no match for vadsæk"
+    // even though vadsæk was the equipped inventory. After a reload only the
+    // inventory DID survives; the equipped container itself must still be
+    // resolvable by name (its current :name answers for it) so the `in` slot
+    // of put finds it beside its contents.
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                ; a reload persists only the inventory DID; the cached ctx
+                ; snapshot (inv-entry) is gone.
+                (#.my.ctx.inv: "did:ma:world#vadsaek")
+                (define bag
+                    (make-map "actor" "did:ma:world#bag" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "bag"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#bag" bag)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "kind?")) "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "name")) "vadsæk")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) ())
+                          (else #f)))
+
+                ; bag is a room child; the equipped inventory container resolves
+                ; by its current name and receives the :put as the target.
+                (set! calls ())
+                (smoke "put bag in vadsæk" (lambda () (put "bag" "in" "vadsæk")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#bag" "put" (list "did:ma:world#vadsaek"))))
+                "put-in-equipped-inventory-ok"
+        "#
+    );
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "put-in-equipped-inventory-ok");
 }
 
 #[test]

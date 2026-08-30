@@ -117,6 +117,23 @@
   (room-child-remove! ctx)
   (display (string-append (event-name ctx) " leaves.")))
 
+; A room parent announces a single child-ctx update: refresh exactly that
+; child's key in the cached snapshot, without a full room refresh. Silent —
+; it only keeps the avatar's visible-actor list in sync.
+(define (event-child-ctx ctx)
+  (room-child-upsert! ctx))
+
+; A room's :child ack wraps the child's own ctx with the room's full ctx as
+; the nested "parent-ctx". Replacing the cached snapshot with it keeps the
+; avatar's visible-actor list fresh after wholesale rebuilds (e.g. roll-call
+; end), where per-child events would be noise.
+(define (event-child ctx)
+  (when (map? ctx)
+    (let ((parent-ctx (map-ref ctx "parent-ctx" #f)))
+      (when (and (map? parent-ctx)
+                 (map? (map-ref parent-ctx "children" #f)))
+        (remember-room! parent-ctx)))))
+
 (define (event-say ctx text)
   (display (string-append (event-name ctx) ": " text)))
 
@@ -160,6 +177,8 @@
   (make-map ":print" event-print
             ":arrive" event-arrive
             ":leave" event-leave
+            ":child-ctx" event-child-ctx
+            ":child" event-child
             ":say" event-say
             ":emote" event-emote
             ":dig" event-dig
