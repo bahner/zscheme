@@ -765,7 +765,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.4",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2138,9 +2138,9 @@ dependencies = [
 
 [[package]]
 name = "ma-zscheme"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "039f6520e476ce299980e6358de4ddaae139ae31e6e567d0dc75b06f864d5614"
+checksum = "ae3d617ba07a8f6637f70b2274a1740e279d6590a8cbcea77564671393cb52b0"
 dependencies = [
  "futures",
 ]
