@@ -145,7 +145,7 @@ fn production_events_render_humans_and_agents_as_occupants() {
     let (_, ctx) = eval(&source).unwrap();
     assert_eq!(
         ctx.output.borrow().as_str(),
-        "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nInventory is empty.\nExits:\nmirror"
+        "Atrium\nQuiet.\nOccupants:\nAlice\nAttila\nThe room appears to be empty.\nExits:\nmirror"
     );
 }
 
@@ -380,7 +380,7 @@ fn production_avatar_resolves_exactly_one_exit_actor() {
 }
 
 #[test]
-fn production_avatar_derives_root_when_creating_first_inventory() {
+fn production_avatar_inventory_is_never_forged_by_a_view() {
     let source = ["stdlib", "runtime", "avatar"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -398,20 +398,21 @@ fn production_avatar_derives_root_when_creating_first_inventory() {
                     "did:ma:world#inventory")
 
                 (assert (equal? (root) "did:ma:world#root"))
-                (assert (equal? (my-inv) "did:ma:world#inventory"))
-                (assert (equal? forge-target "did:ma:world#root"))
-                (assert (equal? (#.my.ctx.inv) "did:ma:world#inventory"))
+                ; a view never forges: with no inventory configured, none is
+                ; created, and the pointer stays unset.
+                (assert (equal? (my-inv-if-any) #f))
+                (assert (equal? forge-target #f))
 
                 (#.my.ctx.inv: "did:ma:elsewhere#travelling-bag")
                 (set! forge-target #f)
-                (assert (equal? (my-inv) "did:ma:elsewhere#travelling-bag"))
+                (assert (equal? (my-inv-if-any) "did:ma:elsewhere#travelling-bag"))
                 (assert (equal? forge-target #f))
-                "avatar-root-derived"
-                "#
+                "avatar-inventory-pure-view"
+        "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "avatar-root-derived");
+    assert_eq!(value.display(), "avatar-inventory-pure-view");
 }
 
 const AVATAR_TEST_PREAMBLE: &str = r#"
@@ -487,7 +488,7 @@ const AVATAR_TEST_SMOKES: &str = r#"
                 (smoke "emote" (lambda () (emote "waves")))
                 (smoke "claim" (lambda () (claim "lamp")))
                 (smoke "tell" (lambda () (tell "lamp" "to" "ping" "once")))
-                (smoke "inv set" (lambda () (inv "did:ma:world#inventory")))
+                (smoke "equip" (lambda () (equip "did:ma:world#box")))
                 (smoke "inv show" (lambda () (inv)))
                 (smoke "look" (lambda () (look)))
                 (smoke "look target" (lambda () (look "lamp")))
@@ -638,7 +639,7 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
 }
 
 #[test]
-fn production_avatar_object_commands_cover_all_permutations() {
+fn production_avatar_equip_books_inventory_and_drops_old() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -648,6 +649,423 @@ fn production_avatar_object_commands_cover_all_permutations() {
         r#"
                 {source}
 
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define crate
+                    (make-map "actor" "did:ma:world#crate" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Crate"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#box" box
+                                                   "did:ma:world#crate" crate
+                                                   "did:ma:world#lamp" lamp)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#lamp")
+                                (equal? method "kind?")) "thing")
+                          ((equal? method "kind?") "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          (else ())))
+
+                ; equip from the room: the same :hold take uses, but the container
+                ; is booked into the inventory slot — only once :parent arrives.
+                (set! calls ())
+                (smoke "equip" (lambda () (equip "Box")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#box" "kind?" ())
+                          (list "did:ma:world#box" "hold" ()))))
+                (assert (not (my-inv-if-any)))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Box")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+                ; never lands in the held slot, and its ctx is cached so the
+                ; inventory container itself resolves by name.
+                (assert (null? (hand-pool)))
+                (assert (equal? (entry-actor (car (resolve-inventory-pool)))
+                                "did:ma:world#box"))
+
+                ; a second equip drops the previous inventory container to the
+                ; room, after the new one's :child ack.
+                (set! calls ())
+                (smoke "equip second" (lambda () (equip "Crate")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#crate"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Crate")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#crate"))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box"))))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#crate" "child"
+                            (list (make-map "actor" "did:ma:world#crate"
+                                            "parent" "did:ma:me"
+                                            "name" "Crate"))))))
+                (assert (null? (hand-pool)))
+
+                ; equipping a non-container is refused before any :hold.
+                (set! calls ())
+                (guard (e ((string-contains e "invalid inventory kind") #t)
+                          (#t (error (string-append "expected kind refusal, got: " e))))
+                    (equip "Lamp")
+                    (error "equip did not refuse"))
+                (assert (equal? calls (list (list "did:ma:world#lamp" "kind?" ()))))
+
+                ; inv takes no arguments; the bare form just renders.
+                (smoke "inv" (lambda () (inv)))
+                (guard (e ((string-contains e "usage: inv") #t)
+                          (#t (error (string-append "expected usage error, got: " e))))
+                    (inv "Box")
+                    (error "inv did not refuse"))
+                "equip-slot-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "equip-slot-ok");
+}
+
+#[test]
+fn production_avatar_equip_from_container_and_nested_inv() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define chest
+                    (make-map "actor" "did:ma:world#chest" "kind" "container"
+                              "parent" "did:ma:world#box" "name" "Chest"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#box" box)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#box")
+                                (equal? method "contents?")) (list chest))
+                          ((equal? method "kind?") "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          (else ())))
+
+                ; box becomes the inventory from the room first, so the nested
+                ; case below has box as the inv with chest inside it.
+                (set! calls ())
+                (smoke "equip box" (lambda () (equip "Box")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Box")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+
+                ; the nested case: chest sits inside box, the current inv. Box
+                ; resolves via the cached inv-entry, chest goes through box's
+                ; :take gate, and the old box is dropped to the room only after
+                ; chest's :child ack.
+                (set! calls ())
+                (smoke "equip nested" (lambda () (equip "Chest" "from" "Box")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#chest"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Chest")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#chest"))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box"))))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#chest" "child"
+                            (list (make-map "actor" "did:ma:world#chest"
+                                            "parent" "did:ma:me"
+                                            "name" "Chest")))))
+                    ; the pick-up is box's :take lock gate, never a :hold.
+                    (assert (equal? (cadddr r)
+                        (list "did:ma:world#box" "take"
+                            (list "did:ma:world#chest")))))
+                "equip-from-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "equip-from-ok");
+}
+
+#[test]
+fn production_avatar_keep_books_held_item_as_inventory() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define crate
+                    (make-map "actor" "did:ma:world#crate" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Crate"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#box" box
+                                                   "did:ma:world#crate" crate
+                                                   "did:ma:world#lamp" lamp)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#lamp")
+                                (equal? method "kind?")) "thing")
+                          ((equal? method "kind?") "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          (else ())))
+
+                ; keep with an empty hand errors.
+                (guard (e ((string-contains e "not holding anything") #t)
+                          (#t (error (string-append "expected empty-hand error, got: " e))))
+                    (keep)
+                    (error "keep did not refuse"))
+
+                ; take then keep: held -> inventory slot, hand freed, and keep
+                ; itself sends no pick-up RPC.
+                (smoke "take" (lambda () (take "Box")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Box")))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
+                (set! calls ())
+                (smoke "keep" (lambda () (keep)))
+                (assert (equal? calls (list (list "did:ma:world#box" "kind?" ()))))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+                (assert (null? (hand-pool)))
+
+                ; keep by name drops the previous inventory container.
+                (smoke "take crate" (lambda () (take "Crate")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#crate"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Crate")))
+                (set! calls ())
+                (smoke "keep crate" (lambda () (keep "Crate")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#crate"))
+                (assert (null? (hand-pool)))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box"))))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#crate" "kind?" ()))))
+
+                ; keeping a non-container is refused.
+                (smoke "take lamp" (lambda () (take "Lamp")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Lamp")))
+                (set! calls ())
+                (guard (e ((string-contains e "invalid inventory kind") #t)
+                          (#t (error (string-append "expected kind refusal, got: " e))))
+                    (keep)
+                    (error "keep did not refuse"))
+                (assert (equal? calls (list (list "did:ma:world#lamp" "kind?" ()))))
+                "keep-slot-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "keep-slot-ok");
+}
+
+#[test]
+fn production_avatar_take_from_equipped_inventory_never_drops_it() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define vadsaek
+                    (make-map "actor" "did:ma:world#vadsaek" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Vadsæk"))
+                (define bag
+                    (make-map "actor" "did:ma:world#bag" "kind" "thing"
+                              "parent" "did:ma:world#vadsaek" "name" "Bag"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#vadsaek" vadsaek)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) (list bag))
+                          ((equal? method "kind?") "/ma/container/0.0.1")
+                          (else ())))
+
+                ; take the vadsæk from the room, then equip it: the container
+                ; moves from the hand slot to the inventory slot.
+                (set! calls ())
+                (smoke "take" (lambda () (take "Vadsæk")))
+                (assert (equal? calls (list (list "did:ma:world#vadsaek" "hold" ()))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#vadsaek"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Vadsæk")))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#vadsaek"))
+                (set! calls ())
+                (smoke "equip" (lambda () (equip "Vadsæk")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#vadsaek" "kind?" ())
+                          (list "did:ma:world#vadsaek" "hold" ()))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#vadsaek"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Vadsæk")))
+                ; the equipped container left the hand slot and is booked.
+                (assert (null? (hand-pool)))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#vadsaek"))
+
+                ; a re-proposal of the equipped container (e.g. a repeated
+                ; :hold racing the booking) never lands in the hand slot.
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#vadsaek"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Vadsæk")))
+                (assert (null? (hand-pool)))
+
+                ; taking the bag out of the equipped vadsæk drops nothing: the
+                ; only relocation call is the container's :take gate.
+                (set! calls ())
+                (smoke "take from" (lambda () (take "Bag" "from" "Vadsæk")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#vadsaek" "take" (list "did:ma:world#bag"))))
+                (assert (not (member? (list "did:ma:world#room" "drop"
+                                            (list "did:ma:world#vadsaek")) calls)))
+                (assert (not (member? (list "did:ma:world#vadsaek" "set-parent"
+                                            (list "did:ma:world#room")) calls)))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#vadsaek"))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#bag"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Bag")))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#bag"))
+
+                ; defence-in-depth: a stale hand slot naming the inventory
+                ; container never drops it nor clears the pointer.
+                (set! held-item vadsaek)
+                (set! calls ())
+                (smoke "take from stale" (lambda () (take "Bag" "from" "Vadsæk")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#vadsaek" "take" (list "did:ma:world#bag"))))
+                (assert (not (member? (list "did:ma:world#room" "drop"
+                                            (list "did:ma:world#vadsaek")) calls)))
+                (assert (not (member? (list "did:ma:world#vadsaek" "set-parent"
+                                            (list "did:ma:world#room")) calls)))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#vadsaek"))
+                "equip-take-from-safe"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "equip-take-from-safe");
+}
+
+#[test]
+fn production_avatar_equip_keeps_unrelated_held_item() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (define crate
+                    (make-map "actor" "did:ma:world#crate" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Crate"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#lamp" lamp
+                                                   "did:ma:world#crate" crate)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#lamp")
+                                (equal? method "kind?")) "thing")
+                          ((equal? method "kind?") "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          (else ())))
+
+                ; hold the lamp, then equip a different container: only the
+                ; booked container leaves the hand slot.
+                (smoke "take lamp" (lambda () (take "Lamp")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Lamp")))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
+                (smoke "equip crate" (lambda () (equip "Crate")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#crate"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Crate")))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#crate"))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
+                "equip-keeps-held"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "equip-keeps-held");
+}
+
+const OBJECT_CMDS_PREAMBLE: &str = r#"
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
                 (#.my.ctx.inv: "did:ma:world#inventory")
@@ -689,7 +1107,21 @@ fn production_avatar_object_commands_cover_all_permutations() {
                           ((equal? method "contents?") ())
                           ((equal? method "owner?") "did:ma:owner")
                           (else ())))
+"#;
 
+fn object_commands_test_source(body: &str) -> String {
+    let libs = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{libs}\n{OBJECT_CMDS_PREAMBLE}\n{body}")
+}
+
+#[test]
+fn production_avatar_take_variants_resolve_and_route() {
+    let source = object_commands_test_source(
+        r#"
                 ; take from the room → :hold directly on the resolved actor.
                 (set! calls ())
                 (smoke "take room" (lambda () (take "Lamp")))
@@ -721,8 +1153,17 @@ fn production_avatar_object_commands_cover_all_permutations() {
                 (smoke "take-from" (lambda () (take-from "Box" "Coin")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
-                (held-clear!)
+                "take-variants-ok"
+        "#,
+    );
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "take-variants-ok");
+}
 
+#[test]
+fn production_avatar_put_and_drop_route_to_actors() {
+    let source = object_commands_test_source(
+        r#"
                 ; put into a container → the item's :put.
                 (set! calls ())
                 (smoke "put" (lambda () (put "Coin" "in" "Box")))
@@ -750,8 +1191,17 @@ fn production_avatar_object_commands_cover_all_permutations() {
                 (smoke "drop by name" (lambda () (drop "Coin")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#coin" "set-parent" (list "did:ma:world#room"))))
-                (held-clear!)
+                "put-drop-ok"
+        "#,
+    );
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "put-drop-ok");
+}
 
+#[test]
+fn production_avatar_recycle_routes_to_owned_actor() {
+    let source = object_commands_test_source(
+        r#"
                 ; recycle an owned object.
                 (set! calls ())
                 (smoke "recycle" (lambda () (recycle "Lamp")))
@@ -764,8 +1214,17 @@ fn production_avatar_object_commands_cover_all_permutations() {
                 (smoke "recycle-from" (lambda () (recycle-from "Box" "Coin")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#coin" "recycle" ())))
-                (held-clear!)
+                "recycle-ok"
+        "#,
+    );
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "recycle-ok");
+}
 
+#[test]
+fn production_avatar_prop_setters_are_command_sugar() {
+    let source = object_commands_test_source(
+        r#"
                 ; name/describe/nick are prop sugar.
                 (set! calls ())
                 (smoke "name" (lambda () (name "Lamp" "as" "Desk Lamp")))
@@ -779,7 +1238,17 @@ fn production_avatar_object_commands_cover_all_permutations() {
                 (smoke "nick" (lambda () (nick "Lamp" "as" "The Lamp")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#lamp" "prop" (list "nick" "The Lamp"))))
+                "prop-sugar-ok"
+        "#,
+    );
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "prop-sugar-ok");
+}
 
+#[test]
+fn production_avatar_owner_and_claim_route_to_actor() {
+    let source = object_commands_test_source(
+        r#"
                 ; owner and claim route to the resolved actor's RPC.
                 (set! calls ())
                 (smoke "owner" (lambda () (owner "Lamp")))
@@ -793,13 +1262,11 @@ fn production_avatar_object_commands_cover_all_permutations() {
                 (smoke "claim secret" (lambda () (claim "Lamp" "hunter2")))
                 (assert (equal? (car (reverse calls))
                     (list "did:ma:world#lamp" "claim" (list "hunter2"))))
-
-                "object-commands-ok"
-        "#
+                "owner-claim-ok"
+        "#,
     );
-
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "object-commands-ok");
+    assert_eq!(value.display(), "owner-claim-ok");
 }
 
 #[test]
