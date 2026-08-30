@@ -1548,6 +1548,127 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
 }
 
 #[test]
+fn production_avatar_inventory_word_resolves_like_any_other_name() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                ; the equipped inventory container is named "Vadsæk", and the
+                ; room also holds a leftover container literally named "inventory".
+                (#.my.ctx.inv: "did:ma:world#vadsaek")
+                (define room-inventory
+                    (make-map "actor" "did:ma:world#room-inventory" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "inventory"))
+                (define vadsaek
+                    (make-map "actor" "did:ma:world#vadsaek" "kind" "container"
+                              "parent" "did:ma:me" "name" "Vadsæk"))
+                (define coin
+                    (make-map "actor" "did:ma:world#coin" "kind" "thing"
+                              "parent" "did:ma:world#vadsaek" "name" "Coin"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#room-inventory" room-inventory)))
+                ; the equipped container's cached ctx puts it in the pool.
+                (set! inv-entry vadsaek)
+
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "kind?")) "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) (list coin))
+                          (else actor)))
+
+                ; "inventory" resolves by name, like any other word: the room child.
+                (assert (equal? (command "inventory" "probe") "did:ma:world#room-inventory"))
+                ; "inv" gets no special treatment either: nothing is named "inv".
+                (guard (e ((string-contains e "no match for") #t)
+                          (#t (error (string-append "expected no-match, got: " e))))
+                    (command "inv" "probe")
+                    (error "inv did not no-match"))
+                ; the equipped container resolves by its own name.
+                (assert (equal? (command "vadsæk" "probe") "did:ma:world#vadsaek"))
+
+                ; take routes the room child's :hold, never the equipped slot's.
+                (set! calls ())
+                (smoke "take inventory" (lambda () (take "inventory")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#room-inventory" "hold" ()))))
+                "inventory-word-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "inventory-word-ok");
+}
+
+#[test]
+fn production_avatar_inv_renders_held_and_equipped_separately() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.inv: "did:ma:world#vadsaek")
+                (define vadsaek
+                    (make-map "actor" "did:ma:world#vadsaek" "kind" "container"
+                              "parent" "did:ma:me" "name" "Vadsæk"))
+                (define bag
+                    (make-map "actor" "did:ma:world#bag" "kind" "thing"
+                              "parent" "did:ma:world#vadsaek" "name" "Bag"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:me" "name" "Lamp"))
+                (set! inv-entry vadsaek)
+                (set! held-item lamp)
+                (define contents-list (list bag))
+                (define (actor-call actor method . params)
+                    (cond ((and (equal? actor "did:ma:world#vadsaek")
+                                (equal? method "contents?")) contents-list)
+                          (else ())))
+
+                ; held and equipped container are distinct lines.
+                (inv)
+                ; empty equipped container, nothing held.
+                (set! held-item #f)
+                (set! contents-list ())
+                (inv)
+                ; no inventory configured at all.
+                (#.my.ctx.inv:)
+                (set! inv-entry #f)
+                (inv)
+                "inv-render-ok"
+        "#
+    );
+
+    let (value, test_ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "inv-render-ok");
+    assert_eq!(
+        test_ctx.output.borrow().as_str(),
+        "holding Lamp\nthe equipped Vadsæk contains Bag\n\
+         holding nothing\nthe equipped Vadsæk contains nothing\n\
+         holding nothing\n"
+    );
+}
+
+#[test]
 fn production_avatar_give_sends_a_claim_offer_to_one_person() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()

@@ -165,17 +165,15 @@
 
 ; The single place that turns (word, pool) into one resolved entry or raises
 ; no-match/ambiguous — never builds the pool itself; every caller assembles
-; its own candidate list first and hands it in here.
+; its own candidate list first and hands it in here. The word "inventory" is
+; not special: it resolves like any other name, against the supplied pool.
 (define (resolve-one-entry word pool)
   (if (starts-with-did? word)
     (candidate-for-did pool word)
-    (if (or (equal? word "inv") (equal? word "inventory"))
-      (let ((inv (my-inv-if-any)))
-        (if inv (candidate-for-did pool inv) (no-match-error word)))
-      (let ((hits (resolve-ref word pool)))
-        (cond ((null? hits) (no-match-error word))
-              ((null? (cdr hits)) (candidate-for-did pool (car hits)))
-              (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits))))))))
+    (let ((hits (resolve-ref word pool)))
+      (cond ((null? hits) (no-match-error word))
+            ((null? (cdr hits)) (candidate-for-did pool (car hits)))
+            (else (ambiguous-error word (map (lambda (did) (candidate-for-did pool did)) hits)))))))
 
 ; Membership events maintain `last-room` directly and topology events replace
 ; it from `look`, but a client can still miss an event while disconnected.
@@ -827,16 +825,23 @@
   (event-exits (room-call "exits?"))
   nil)
 
-; inv is a pure view: what you hold plus the contents of your inventory
-; container. Booking a container as the inventory is equip/keep's job, and
-; the view never creates one just because nothing is configured yet.
+; inv is a pure view: what you hold and what the equipped container holds are
+; shown as separate facts. Booking a container as the inventory is equip/keep's
+; job, and the view never creates one just because nothing is configured yet.
 (define (inv . rest)
   (if (pair? rest)
     (error "usage: inv")
     (let* ((inventory (my-inv-if-any))
            (contents (guard (e (#t ()))
-                      (if inventory (container-contents inventory) ()))))
-      (event-inventory (append (hand-pool) contents))
+                      (if inventory (container-contents inventory) ())))
+           ; the cached ctx supplies the container's name when it still matches
+           ; the configured inventory; after a reload only the DID is known, so
+           ; the bare DID is shown instead.
+           (container (if (and inventory (map? inv-entry)
+                               (equal? (entry-actor inv-entry) inventory))
+                          inv-entry
+                          inventory)))
+      (event-inventory (hand-pool) container contents)
       nil)))
 
 ; `help` with no argument shows the avatar's own command list; `help <name>`
@@ -868,7 +873,7 @@
         "put <item...> in <container...>  put something into a container\n"
         "recycle-from <container> <name>  destroy something inside a container that you own\n"
         "roll-call [<target...>] [begin [secs]|end]  recount a node's children\n"
-        "inv                     show what you're holding and your own inventory\n"
+        "inv                     show what you're holding and what your equipped container holds\n"
         "prop <target> <key> [value...]  set a named prop on any actor\n"
         "name <target...> as <name...>   set the name prop\n"
         "describe <target...> as <text...>  set the description prop\n"

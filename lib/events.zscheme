@@ -77,8 +77,21 @@
 (define (event-things things)
   (display (event-things-lines "" things "The room appears to be empty.")))
 
-(define (event-inventory things)
-  (display (event-things-lines "" things "Inventory is empty.")))
+; inv renders the two inventory facts separately so it is never ambiguous
+; which actor is held and which is the equipped container.
+(define (event-inventory held container contents)
+  (let ((container-name (if (map? container) (event-name container) container)))
+    (display
+      (string-append
+        (string-append "holding "
+                       (if (pair? held) (event-name (car held)) "nothing"))
+        (if container
+            (string-append "\nthe equipped " container-name " contains "
+                           (if (null? contents)
+                               "nothing"
+                               (string-join (map event-name contents) ", ")))
+            "")
+        "\n"))))
 
 (define (room-child-upsert! ctx)
   (when (and (map? last-room) (map? ctx))
