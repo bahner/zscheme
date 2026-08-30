@@ -756,27 +756,46 @@ fn production_avatar_equip_books_inventory_and_drops_old() {
                 (assert (equal? (entry-actor (car (resolve-inventory-pool)))
                                 "did:ma:world#box"))
 
-                ; a second equip drops the previous inventory container to the
-                ; room, after the new one's :child ack.
+                ; re-equipping the same container is a deliberate no-op — no
+                ; re-hold or re-book — so a racing :parent re-proposal can
+                ; never churn the slot.
+                (set! calls ())
+                (smoke "equip same" (lambda () (equip "Box")))
+                (assert (equal? calls ()))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+                (assert (null? (hand-pool)))
+
+                ; a second equip first unequips the old inventory — it lands in
+                ; the hand — and the pick-up's make-room step then drops it to
+                ; the room, all before the new one's :child ack arrives.
                 (set! calls ())
                 (smoke "equip second" (lambda () (equip "Crate")))
+                ; the old container is already out of the slot and held.
+                (assert (not (my-inv-if-any)))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
                 (on-event ":parent" (list (make-map "actor" "did:ma:world#crate"
                                                       "parent" "did:ma:me"
                                                       "name" "Crate")))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#crate"))
+                ; the old parent's confirmation that box's drop committed frees
+                ; the hand the old container briefly occupied.
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                                                      "parent" "did:ma:world#room")))
+                (assert (null? (hand-pool)))
                 (let ((r (reverse calls)))
                     (assert (equal? (car r)
-                        (list "did:ma:world#box" "set-parent"
-                            (list "did:ma:world#room"))))
-                    (assert (equal? (cadr r)
-                        (list "did:ma:world#room" "drop"
-                            (list "did:ma:world#box"))))
-                    (assert (equal? (caddr r)
                         (list "did:ma:world#crate" "child"
                             (list (make-map "actor" "did:ma:world#crate"
                                             "parent" "did:ma:me"
-                                            "name" "Crate"))))))
-                (assert (null? (hand-pool)))
+                                            "name" "Crate")))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#crate" "hold" ())))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadddr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box")))))
 
                 ; equipping a non-container is refused before any :hold.
                 (set! calls ())
@@ -844,31 +863,33 @@ fn production_avatar_equip_from_container_and_nested_inv() {
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
 
                 ; the nested case: chest sits inside box, the current inv. Box
-                ; resolves via the cached inv-entry, chest goes through box's
-                ; :take gate, and the old box is dropped to the room only after
-                ; chest's :child ack.
+                ; resolves via the cached inv-entry and is unequipped at command
+                ; time — it lands in the hand — and the pick-up's make-room step
+                ; drops it to the room before chest's :child ack ever arrives.
                 (set! calls ())
                 (smoke "equip nested" (lambda () (equip "Chest" "from" "Box")))
+                (assert (not (my-inv-if-any)))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
                 (on-event ":parent" (list (make-map "actor" "did:ma:world#chest"
                                                       "parent" "did:ma:me"
                                                       "name" "Chest")))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#chest"))
                 (let ((r (reverse calls)))
+                    ; the pick-up is box's :take lock gate, never a :hold.
                     (assert (equal? (car r)
-                        (list "did:ma:world#box" "set-parent"
-                            (list "did:ma:world#room"))))
-                    (assert (equal? (cadr r)
-                        (list "did:ma:world#room" "drop"
-                            (list "did:ma:world#box"))))
-                    (assert (equal? (caddr r)
                         (list "did:ma:world#chest" "child"
                             (list (make-map "actor" "did:ma:world#chest"
                                             "parent" "did:ma:me"
                                             "name" "Chest")))))
-                    ; the pick-up is box's :take lock gate, never a :hold.
-                    (assert (equal? (cadddr r)
+                    (assert (equal? (cadr r)
                         (list "did:ma:world#box" "take"
-                            (list "did:ma:world#chest")))))
+                            (list "did:ma:world#chest"))))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadddr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box")))))
                 "equip-from-ok"
         "#
     );
@@ -2137,6 +2158,111 @@ fn unit_dot_alias_storage_feeds_target_resolution() {
         test_ctx.config.borrow().resolve_target("@sky#room"),
         Ok("did:ma:sky#room".to_string())
     );
+}
+
+#[test]
+fn production_avatar_unequip_holds_inventory_and_clears_slot() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:me" "name" "Box"))
+                (define crate
+                    (make-map "actor" "did:ma:world#crate" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Crate"))
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#crate" crate
+                                                   "did:ma:world#lamp" lamp)))
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((equal? method "kind?") "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          (else ())))
+
+                ; box is the equipped inventory, parented to this avatar.
+                (book-inventory! "did:ma:world#box" box)
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+
+                ; unequip is pure slot bookkeeping: no RPCs, the container moves
+                ; to the hand, and the inventory slot is cleared.
+                (set! calls ())
+                (smoke "unequip" (lambda () (unequip)))
+                (assert (equal? calls ()))
+                (assert (not (my-inv-if-any)))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
+
+                ; the now-held container drops like any other held item, and the
+                ; old parent's confirmation frees the hand.
+                (set! calls ())
+                (smoke "drop" (lambda () (drop)))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#box" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#box")))))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                                                      "parent" "did:ma:world#room")))
+                (assert (null? (hand-pool)))
+
+                ; unequip refuses when nothing is equipped.
+                (guard (e ((string-contains e "no inventory equipped") #t)
+                          (#t (error (string-append "expected unequip refusal, got: " e))))
+                    (unequip)
+                    (error "unequip did not refuse"))
+
+                ; an optional name must resolve to the equipped container.
+                (book-inventory! "did:ma:world#box" box)
+                (smoke "unequip by name" (lambda () (unequip "Box")))
+                (assert (not (my-inv-if-any)))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
+                (book-inventory! "did:ma:world#box" box)
+                (guard (e ((string-contains e "is not your equipped inventory") #t)
+                          (#t (error (string-append "expected name refusal, got: " e))))
+                    (unequip "Crate")
+                    (error "unequip did not refuse by name"))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+
+                ; unequip with a full hand drops the held item first so the
+                ; container always lands in a free hand.
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:me")))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
+                (set! calls ())
+                (smoke "unequip full hand" (lambda () (unequip)))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#lamp" "set-parent"
+                            (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop"
+                            (list "did:ma:world#lamp")))))
+                (assert (not (my-inv-if-any)))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
+                "unequip-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "unequip-ok");
 }
 
 #[test]

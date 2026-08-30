@@ -542,14 +542,28 @@
 ; Shared equip tail: kind-gate, arm the pending route, then trigger the same
 ; pick-up take uses (:hold from room/hand, :take from a container). A refusal
 ; clears the pending flag and propagates the actor's error.
+;
+; Equipping the container that is already the inventory is a deliberate no-op —
+; no re-hold or re-book — so a racing :parent re-proposal can never churn the
+; slot. Otherwise a new container first unequips the old one — it lands in the
+; hand — and the ordinary make-room step take uses then drops it to the room.
+; The equipped container is never a special case for drop itself.
 (define (equip-propose! did propose)
-  (let ((kind (actor-call did "kind?")))
-    (if (equal? kind "/ma/container/0.0.1")
-      (begin
-        (set! equip-pending did)
-        (guard (e (#t (set! equip-pending #f) (error e)))
-          (propose)))
-      (error (string-append "invalid inventory kind: " kind))))
+  (if (equal? did (my-inv-if-any))
+    nil
+    (let ((kind (actor-call did "kind?")))
+      (if (equal? kind "/ma/container/0.0.1")
+        (begin
+          (set! equip-pending did)
+          (guard (e (#t (set! equip-pending #f) (error e)))
+            (let ((old (my-inv-if-any)))
+              (when old
+                (drop-held-to-room!)
+                (unequip-to-hand! old)))
+            (unless (and held-item (equal? did (entry-actor held-item)))
+              (drop-held-to-room!))
+            (propose)))
+        (error (string-append "invalid inventory kind: " kind)))))
   nil)
 
 (define keep-usage "usage: keep [<item>]")
@@ -577,6 +591,34 @@
                   nil)
                 (error (string-append "invalid inventory kind: " kind))))))))))
 
+; Unequip is keep's mirror image: the equipped inventory container leaves the
+; inventory slot and lands in the hand. It is already parented to this avatar,
+; so no pick-up RPC is needed — only the slot bookkeeping. Whatever is in the
+; hand is dropped to the room first, so the container always lands in a free
+; hand. An optional name must resolve to the equipped container itself.
+(define unequip-usage "usage: unequip [<inventory>]")
+
+(define (unequip . rest)
+  (let ((inventory (my-inv-if-any)))
+    (if (not inventory)
+      (error "no inventory equipped")
+      (let ((matched? (if (null? rest)
+                         #t
+                         (guard (e (#t #f))
+                           (equal? inventory
+                                   (resolve-in-given-pool (join-words rest)
+                                                          (resolve-inventory-pool)))))))
+        (if (not matched?)
+          (error (string-append (join-words rest) " is not your equipped inventory"))
+          (with-action-context
+            (if (null? rest)
+              "could not unequip it"
+              (string-append "could not unequip " (join-words rest)))
+            (lambda ()
+              (drop-held-to-room!)
+              (unequip-to-hand! inventory)
+              nil)))))))
+
 ; One inventory slot: booking a new container drops the previous one to the
 ; room (if any and different) with the same room-drop + set-parent relocation
 ; every other drop path uses. `ctx` is the container's own ctx; it is cached
@@ -589,6 +631,14 @@
   (set! inv-entry ctx)
   (#.my.ctx.inv: did)
   (display (string-append "inventory set to " did)))
+
+; The shared unequip slot move: the equipped container leaves the inventory
+; slot and lands in the held slot. Pure bookkeeping — it is already parented
+; to this avatar, so no pick-up RPC is needed.
+(define (unequip-to-hand! inventory)
+  (held-add! (or inv-entry (inventory-display-ctx inventory)))
+  (set! inv-entry #f)
+  (#.my.ctx.inv:))
 
 ; A cheat: locate an object by its bare DID even though it never surfaces in
 ; `look`/`inv` (e.g. it isn't a child of the current room or your inventory
@@ -953,6 +1003,7 @@
         "take-from <container> <name>  take something out of a container\n"
         "equip <container> [from <container>]  carry a container as your inventory\n"
         "keep [<item>]           make the held container your inventory\n"
+        "unequip [<inventory>]   take the equipped container back into your hand\n"
         "find <did>              take a hidden object by DID if it's here, on you, or in your inventory\n"
         "drop                    drop what you're holding\n"
         "drop <item>             drop by name (held, or from your inventory)\n"
