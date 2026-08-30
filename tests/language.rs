@@ -1670,6 +1670,57 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
 }
 
 #[test]
+fn production_avatar_go_blocked_exit_displays_locked_message() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.nick: "tester")
+
+                (define mirror
+                    (make-map "actor" "did:ma:world#exit-mirror" "kind" "exit"
+                              "parent" "did:ma:world#room" "direction" "mirror"
+                              "name" "Mirror"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map "did:ma:world#exit-mirror" mirror)))
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (if (equal? method "traverse")
+                      ; A locked exit echoes the source room back as parent
+                      ; with blocking text.
+                      (make-map "did" "did:ma:me"
+                                "parent" "did:ma:world#room"
+                                "text" "The way is locked.")
+                      ()))
+
+                (go "mirror")
+
+                ; The exit was asked exactly once; the blocking text is shown
+                ; instead of a second, pointless re-entry into the same room.
+                (assert (equal? calls
+                    (list (list "did:ma:world#exit-mirror" "traverse"
+                                (list (make-map "did" "did:ma:me"
+                                                "parent" "did:ma:world#room"))))))
+                "avatar-go-blocked-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-go-blocked-ok");
+    assert_eq!(ctx.output.borrow().as_str(), "The way is locked.");
+}
+
+#[test]
 fn production_split_command_parses_reserved_keyword_slots() {
     let source = ["stdlib", "avatar"]
         .into_iter()

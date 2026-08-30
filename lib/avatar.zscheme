@@ -359,7 +359,11 @@
                      (actor-call exit "traverse" ctx (join-words secret-words)))))
     (if (map? result)
       (let ((parent (map-ref result "parent" #f)))
-        (if parent
+        ; A locked exit (or one that leads nowhere) echoes the source room
+        ; back as `parent` with blocking text — only a *different* parent
+        ; room completes the move, so a same-room reply is shown, not
+        ; silently re-entered.
+        (if (and parent (not (equal? parent (room))))
           (enter parent (#.my.ctx.nick))
           (display (map-ref result "text" "You can't go that way."))))
       (display result)))
