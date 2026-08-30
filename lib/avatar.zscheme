@@ -964,7 +964,10 @@
 ;; ── Property setters ───────────────────────────────────────────────────────
 
 (define (prop target key . value-words)
-  (display (apply command target "prop" key value-words))
+  (let ((reply (apply command target "prop" key value-words)))
+    ; A bare :ok ack (Nil) carries no information; only a non-nil reply is
+    ; worth showing here.
+    (unless (null? reply) (display reply)))
   nil)
 
 ; `as` separates target from value, so multi-word names and descriptions need
