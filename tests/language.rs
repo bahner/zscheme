@@ -638,6 +638,230 @@ fn production_avatar_transfer_commands_match_lambda_ma_rpcs() {
 }
 
 #[test]
+fn production_avatar_object_commands_cover_all_permutations() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.inv: "did:ma:world#inventory")
+                (#.my.ctx.nick: "tester")
+
+                (define lamp
+                    (make-map "actor" "did:ma:world#lamp" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Lamp"))
+                (define vase
+                    (make-map "actor" "did:ma:world#vase" "kind" "thing"
+                              "parent" "did:ma:world#room" "name" "Vase"))
+                (define box
+                    (make-map "actor" "did:ma:world#box" "kind" "container"
+                              "parent" "did:ma:world#room" "name" "Box"))
+                (define coin
+                    (make-map "actor" "did:ma:world#coin" "kind" "thing"
+                              "parent" "did:ma:world#inventory" "name" "Coin"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room"
+                              "children" (make-map "did:ma:world#lamp" lamp
+                                                   "did:ma:world#vase" vase
+                                                   "did:ma:world#box" box)))
+
+                (define calls ())
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#inventory")
+                                (equal? method "kind?"))
+                           "/ma/container/0.0.1")
+                          ((and (equal? actor "did:ma:world#inventory")
+                                (equal? method "contents?"))
+                           (list coin))
+                          ((and (equal? actor "did:ma:world#box")
+                                (equal? method "contents?"))
+                           (list coin))
+                          ((equal? method "contents?") ())
+                          ((equal? method "owner?") "did:ma:owner")
+                          (else ())))
+
+                ; take from the room → :hold directly on the resolved actor.
+                (set! calls ())
+                (smoke "take room" (lambda () (take "Lamp")))
+                (assert (equal? calls
+                    (list (list "did:ma:world#lamp" "hold" ()))))
+
+                ; taking a second thing while already holding drops the current one first.
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:me")))
+                (set! calls ())
+                (smoke "take while holding" (lambda () (take "Vase")))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r) (list "did:ma:world#vase" "hold" ())))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#lamp" "set-parent" (list "did:ma:world#room"))))
+                    (assert (equal? (caddr r)
+                        (list "did:ma:world#room" "drop" (list "did:ma:world#lamp")))))
+                (held-clear!)
+
+                ; take from a container → the container's :take.
+                (set! calls ())
+                (smoke "take from container" (lambda () (take "Coin" "from" "Box")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+                (held-clear!)
+
+                ; take-from is the positional alias for the same verb.
+                (set! calls ())
+                (smoke "take-from" (lambda () (take-from "Box" "Coin")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#box" "take" (list "did:ma:world#coin"))))
+                (held-clear!)
+
+                ; put into a container → the item's :put.
+                (set! calls ())
+                (smoke "put" (lambda () (put "Coin" "in" "Box")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#coin" "put" (list "did:ma:world#box"))))
+                (held-clear!)
+
+                ; drop a held item (no argument).
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
+                                                      "parent" "did:ma:me")))
+                (set! calls ())
+                (smoke "drop" (lambda () (drop)))
+                (let ((r (reverse calls)))
+                    (assert (equal? (car r)
+                        (list "did:ma:world#coin" "set-parent" (list "did:ma:world#room"))))
+                    (assert (equal? (cadr r)
+                        (list "did:ma:world#room" "drop" (list "did:ma:world#coin")))))
+                (held-clear!)
+
+                ; drop a held item by name.
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#coin"
+                                                      "parent" "did:ma:me"
+                                                      "name" "Coin")))
+                (set! calls ())
+                (smoke "drop by name" (lambda () (drop "Coin")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#coin" "set-parent" (list "did:ma:world#room"))))
+                (held-clear!)
+
+                ; recycle an owned object.
+                (set! calls ())
+                (smoke "recycle" (lambda () (recycle "Lamp")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "recycle" ())))
+                (held-clear!)
+
+                ; recycle an object inside a container.
+                (set! calls ())
+                (smoke "recycle-from" (lambda () (recycle-from "Box" "Coin")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#coin" "recycle" ())))
+                (held-clear!)
+
+                ; name/describe/nick are prop sugar.
+                (set! calls ())
+                (smoke "name" (lambda () (name "Lamp" "as" "Desk Lamp")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "prop" (list "name" "Desk Lamp"))))
+                (set! calls ())
+                (smoke "describe" (lambda () (describe "Lamp" "as" "A warm lamp.")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "prop" (list "description" "A warm lamp."))))
+                (set! calls ())
+                (smoke "nick" (lambda () (nick "Lamp" "as" "The Lamp")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "prop" (list "nick" "The Lamp"))))
+
+                ; owner and claim route to the resolved actor's RPC.
+                (set! calls ())
+                (smoke "owner" (lambda () (owner "Lamp")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "owner?" ())))
+                (set! calls ())
+                (smoke "claim" (lambda () (claim "Lamp")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "claim" ())))
+                (set! calls ())
+                (smoke "claim secret" (lambda () (claim "Lamp" "hunter2")))
+                (assert (equal? (car (reverse calls))
+                    (list "did:ma:world#lamp" "claim" (list "hunter2"))))
+
+                "object-commands-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "object-commands-ok");
+}
+
+#[test]
+fn production_avatar_go_traverses_exit_and_enters_target() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.inv: "did:ma:world#inventory")
+                (#.my.ctx.nick: "tester")
+
+                (define hull
+                    (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
+                              "parent" "did:ma:world#room" "direction" "hull"
+                              "name" "Hull"))
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map "did:ma:world#exit-hull" hull)))
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#inventory")
+                                (equal? method "kind?"))
+                           "/ma/container/0.0.1")
+                          ((equal? method "contents?") ())
+                          ((equal? method "traverse")
+                           (make-map "parent" "did:ma:world#elsewhere"
+                                     "text" "You go hull."))
+                          ((equal? method "enter")
+                           (make-map "parent" "did:ma:world#elsewhere"
+                                     "nick" "tester"))
+                          (else ())))
+
+                (go "hull")
+
+                ; First hop: ask the exit to traverse with our own did and parent.
+                (assert (equal? (car calls)
+                    (list "did:ma:world#exit-hull" "traverse"
+                          (list (make-map "did" "did:ma:me"
+                                          "parent" "did:ma:world#room")))))
+                ; Second hop: enter the room the exit returned.
+                (assert (equal? (cadr calls)
+                    (list "did:ma:world#elsewhere" "enter" (list "tester"))))
+                ; The room address was updated from the entry reply.
+                (assert (equal? (#.my.ctx.room) "did:ma:world#elsewhere"))
+                "avatar-go-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-go-ok");
+}
+
+#[test]
 fn production_split_command_parses_reserved_keyword_slots() {
     let source = ["stdlib", "avatar"]
         .into_iter()
@@ -665,12 +889,46 @@ fn production_split_command_parses_reserved_keyword_slots() {
                                 "raised"))
                 (assert (equal? (guard (e (#t "raised")) (split-command! (list "lampe" "in") "in" "usage" #t) "returned")
                                 "raised"))
+                ; Optional keyword present but empty after is also an error
+                ; (take <item> from / forge <kind> named <name> in).
+                (assert (equal? (guard (e (#t "raised")) (split-command! (list "lampe" "from") "from" "usage" #f) "returned")
+                                "raised"))
                 "split-command-ok"
                 "#
     );
 
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "split-command-ok");
+}
+
+#[test]
+fn production_forge_rejects_did_name() {
+    let source = ["stdlib", "runtime", "avatar"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                ; A name must never be a DID or DID-URL: the resolver treats a
+                ; leading did:ma: as an address, so a name shaped like one is
+                ; unresolvable. Both bare and fragmented forms are rejected.
+                (assert (equal? (guard (e (#t "raised"))
+                                  (forge "thing" "named" "did:ma:world#lamp" "in" "did:ma:world#inventory")
+                                  "returned")
+                                "raised"))
+                (assert (equal? (guard (e (#t "raised"))
+                                  (forge "thing" "named" "did:ma:world" "in" "did:ma:world#inventory")
+                                  "returned")
+                                "raised"))
+                "forge-did-name-ok"
+                "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "forge-did-name-ok");
 }
 
 #[test]

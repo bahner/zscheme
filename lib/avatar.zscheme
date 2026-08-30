@@ -352,7 +352,7 @@
         (after (words-after-keyword words keyword)))
     (when (or (null? before)
               (and required? (not after))
-              (and after (null? after)))
+              (null? after))
       (error usage-text))
     (list before after)))
 
@@ -371,7 +371,9 @@
              (name (join-words (car s)))
              (target-words (cadr s))
              (target (if target-words (join-words target-words) (or (my-inv-if-any) (room)))))
-        (display (command target "forge" (make-map "kind" kind "name" name)))
+        (if (starts-with-did? name)
+            (error "name must not be a DID or DID-URL")
+            (display (command target "forge" (make-map "kind" kind "name" name))))
         nil)))
 
 (define (leave)
@@ -401,9 +403,8 @@
         (self (#.my.identity.did)))
     (cond
       ((equal? parent self)
-       (guard (e (#t #f))
-         (actor-call actor "child" ctx)
-         (held-add! ctx)))
+       (actor-call actor "child" ctx)
+       (held-add! ctx))
       ; The old parent's own confirmation that a committed transfer actually
       ; happened (node.ma's commit-node-parent!) — the only trustworthy signal
       ; that we're no longer holding it, so callers never clear held-item
