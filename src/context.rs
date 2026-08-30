@@ -513,11 +513,15 @@ fn decode_rpc_reply(payload: &[u8]) -> Result<SchemeVal, String> {
         Err(_) => return Ok(SchemeVal::Str(String::from_utf8_lossy(payload).to_string())),
     };
     match &val {
-        V::Text(s) if s == ":ok" => Ok(SchemeVal::Nil),
+        // A bare :ok ack is an atom, not nothing — preserve it so callers
+        // can see the success ack (display "ok", equality with ":ok") instead
+        // of conflating it with Nil/().
+        V::Text(s) if s == ":ok" => Ok(SchemeVal::Str(s.clone())),
         V::Array(items) => match (items.first(), items.get(1)) {
             (Some(V::Text(verb)), _) if verb == ":ok" => match items.get(1) {
                 Some(v) => Ok(cbor_to_scheme_val(v)),
-                None => Ok(SchemeVal::Nil),
+                // [:ok] with no payload is the array form of the bare ack.
+                None => Ok(SchemeVal::Str(":ok".to_string())),
             },
             (Some(V::Text(verb)), _) if verb == ":error" => {
                 let reason = items
@@ -540,7 +544,8 @@ fn decode_rpc_reply(payload: &[u8]) -> Result<SchemeVal, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cbor_to_scheme_val, scheme_val_to_cbor};
+    use super::{cbor_to_scheme_val, decode_rpc_reply, scheme_val_to_cbor};
+    use ciborium::Value as V;
     use ma_zscheme::SchemeVal;
 
     #[test]
@@ -550,5 +555,51 @@ mod tests {
             panic!("expected byte value");
         };
         assert_eq!(bytes, vec![0x89, b'P', b'N', b'G']);
+    }
+
+    fn cbor_bytes(value: &V) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(value, &mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn bare_ok_ack_is_preserved_as_an_atom_not_nil() {
+        assert!(matches!(
+            decode_rpc_reply(&cbor_bytes(&V::Text(":ok".to_string()))).unwrap(),
+            SchemeVal::Str(s) if s == ":ok"
+        ));
+    }
+
+    #[test]
+    fn empty_ok_array_is_the_array_form_of_the_bare_ack() {
+        assert!(matches!(
+            decode_rpc_reply(&cbor_bytes(&V::Array(vec![V::Text(":ok".to_string())]))).unwrap(),
+            SchemeVal::Str(s) if s == ":ok"
+        ));
+    }
+
+    #[test]
+    fn ok_array_with_payload_returns_the_payload() {
+        assert!(matches!(
+            decode_rpc_reply(&cbor_bytes(&V::Array(vec![
+                V::Text(":ok".to_string()),
+                V::Text("prop updated".to_string()),
+            ])))
+            .unwrap(),
+            SchemeVal::Str(s) if s == "prop updated"
+        ));
+    }
+
+    #[test]
+    fn error_array_returns_the_reason() {
+        assert_eq!(
+            decode_rpc_reply(&cbor_bytes(&V::Array(vec![
+                V::Text(":error".to_string()),
+                V::Text("not authorised to edit props".to_string()),
+            ])))
+            .unwrap_err(),
+            "not authorised to edit props"
+        );
     }
 }
