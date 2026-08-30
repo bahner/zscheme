@@ -899,7 +899,7 @@ fn production_avatar_equip_from_container_and_nested_inv() {
 }
 
 #[test]
-fn production_avatar_keep_books_held_item_as_inventory() {
+fn production_avatar_keep_stows_held_item_in_inventory() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -931,9 +931,7 @@ fn production_avatar_keep_books_held_item_as_inventory() {
                         (thunk)))
                 (define (actor-call actor method . args)
                     (set! calls (append calls (list (list actor method args))))
-                    (cond ((and (equal? actor "did:ma:world#lamp")
-                                (equal? method "kind?")) "thing")
-                          ((equal? method "kind?") "/ma/container/0.0.1")
+                    (cond ((equal? method "put") "put-1")
                           ((equal? method "contents?") ())
                           (else ())))
 
@@ -943,55 +941,57 @@ fn production_avatar_keep_books_held_item_as_inventory() {
                     (keep)
                     (error "keep did not refuse"))
 
-                ; take then keep: held -> inventory slot, hand freed, and keep
-                ; itself sends no pick-up RPC.
-                (smoke "take" (lambda () (take "Box")))
-                (on-event ":parent" (list (make-map "actor" "did:ma:world#box"
+                ; keep without an equipped inventory errors.
+                (smoke "take lamp" (lambda () (take "Lamp")))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
                                                       "parent" "did:ma:me"
-                                                      "name" "Box")))
-                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#box"))
+                                                      "name" "Lamp")))
+                (guard (e ((string-contains e "no inventory equipped") #t)
+                          (#t (error (string-append "expected no-inventory error, got: " e))))
+                    (keep)
+                    (error "keep did not refuse"))
+
+                ; equip the inventory container, then keep stows the held item
+                ; inside it — the inventory slot itself is never changed.
+                (#.my.ctx.inv: "did:ma:world#box")
                 (set! calls ())
                 (smoke "keep" (lambda () (keep)))
-                (assert (equal? calls (list (list "did:ma:world#box" "kind?" ()))))
+                (assert (equal? calls (list (list "did:ma:world#lamp" "put"
+                                                  (list "did:ma:world#box")))))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
+                (assert (equal? (map-ref pending-actions "put-1" #f) #t))
+                ; the held slot clears only on the old-parent confirmation.
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
+                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
+                                                      "parent" "did:ma:world#box"
+                                                      "name" "Lamp")))
                 (assert (null? (hand-pool)))
+                (on-event ":put-event" (list (make-map "action" "put"
+                                                       "id" "put-1" "status" "ok")))
+                (assert (equal? (map-ref pending-actions "put-1" #f) #f))
 
-                ; keep by name drops the previous inventory container.
+                ; keep by name stows the named held item in the same inventory.
                 (smoke "take crate" (lambda () (take "Crate")))
                 (on-event ":parent" (list (make-map "actor" "did:ma:world#crate"
                                                       "parent" "did:ma:me"
                                                       "name" "Crate")))
                 (set! calls ())
                 (smoke "keep crate" (lambda () (keep "Crate")))
-                (assert (equal? (#.my.ctx.inv) "did:ma:world#crate"))
-                (assert (null? (hand-pool)))
-                (let ((r (reverse calls)))
-                    (assert (equal? (car r)
-                        (list "did:ma:world#box" "set-parent"
-                            (list "did:ma:world#room"))))
-                    (assert (equal? (cadr r)
-                        (list "did:ma:world#room" "drop"
-                            (list "did:ma:world#box"))))
-                    (assert (equal? (caddr r)
-                        (list "did:ma:world#crate" "kind?" ()))))
+                (assert (equal? calls (list (list "did:ma:world#crate" "put"
+                                                  (list "did:ma:world#box")))))
+                (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
 
-                ; keeping a non-container is refused.
-                (smoke "take lamp" (lambda () (take "Lamp")))
-                (on-event ":parent" (list (make-map "actor" "did:ma:world#lamp"
-                                                      "parent" "did:ma:me"
-                                                      "name" "Lamp")))
-                (set! calls ())
-                (guard (e ((string-contains e "invalid inventory kind") #t)
-                          (#t (error (string-append "expected kind refusal, got: " e))))
-                    (keep)
+                ; keeping something you're not holding is refused.
+                (guard (e ((string-contains e "you're not holding Lamp") #t)
+                          (#t (error (string-append "expected mismatch refusal, got: " e))))
+                    (keep "Lamp")
                     (error "keep did not refuse"))
-                (assert (equal? calls (list (list "did:ma:world#lamp" "kind?" ()))))
-                "keep-slot-ok"
+                "keep-stow-ok"
         "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "keep-slot-ok");
+    assert_eq!(value.display(), "keep-stow-ok");
 }
 
 #[test]

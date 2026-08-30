@@ -291,7 +291,7 @@
 ; The inventory pointer is read-only here — never forges — so a mere name
 ; lookup (e.g. resolve-name's inventory fallback, or a bare `inv`) can't have
 ; the side effect of creating a fresh "inventory" container under the runtime
-; root. Booking an inventory container is equip/keep's job, never a view's.
+; root. Booking an inventory container is equip's job, never a view's.
 (define (my-inv-if-any)
   (guard (e (#t #f))
     (let ((existing (#.my.ctx.inv)))
@@ -568,8 +568,12 @@
 
 (define keep-usage "usage: keep [<item>]")
 
-; keep books the held item as the inventory. It is already parented to this
-; avatar, so no pick-up RPC is needed — only the slot bookkeeping.
+; keep stows the held item inside the equipped inventory container. The item is
+; already parented to this avatar, so no pick-up RPC is needed — keep issues
+; the same :put request `put <item> in <inventory>` sends, with the target
+; container implicit. The container's own gate and the ordinary parent/child
+; handshake (including the old-parent :parent confirmation that clears the
+; held slot) carry the actual move.
 (define (keep . rest)
   (if (not held-item)
     (error "you're not holding anything")
@@ -583,13 +587,12 @@
         (with-action-context
           (if (null? rest) "could not keep it" (string-append "could not keep " (join-words rest)))
           (lambda ()
-            (let ((kind (actor-call target "kind?")))
-              (if (equal? kind "/ma/container/0.0.1")
-                (begin
-                  (book-inventory! target held-item)
-                  (held-clear!)
-                  nil)
-                (error (string-append "invalid inventory kind: " kind))))))))))
+            (let ((inventory (my-inv-if-any)))
+              (if (not inventory)
+                (error "no inventory equipped")
+                (let ((id (actor-call target "put" inventory)))
+                  (when (string? id) (pending-store! id))))
+              nil)))))))
 
 ; Unequip is keep's mirror image: the equipped inventory container leaves the
 ; inventory slot and lands in the hand. It is already parented to this avatar,
@@ -962,7 +965,7 @@
   nil)
 
 ; inv is a pure view: what you hold and what the equipped container holds are
-; shown as separate facts. Booking a container as the inventory is equip/keep's
+; shown as separate facts. Booking a container as the inventory is equip's
 ; job, and the view never creates one just because nothing is configured yet.
 (define (inv . rest)
   (if (pair? rest)
@@ -1002,7 +1005,7 @@
         "take <name> from <container>  take something out of a container\n"
         "take-from <container> <name>  take something out of a container\n"
         "equip <container> [from <container>]  carry a container as your inventory\n"
-        "keep [<item>]           make the held container your inventory\n"
+        "keep [<item>]           put the held item into your inventory\n"
         "unequip [<inventory>]   take the equipped container back into your hand\n"
         "find <did>              take a hidden object by DID if it's here, on you, or in your inventory\n"
         "drop                    drop what you're holding\n"
