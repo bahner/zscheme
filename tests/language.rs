@@ -1670,7 +1670,7 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
 }
 
 #[test]
-fn production_avatar_go_blocked_exit_displays_locked_message() {
+fn production_avatar_go_blocked_exit_does_not_reenter() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -1697,7 +1697,7 @@ fn production_avatar_go_blocked_exit_displays_locked_message() {
                     (set! calls (append calls (list (list actor method args))))
                     (if (equal? method "traverse")
                       ; A locked exit echoes the source room back as parent
-                      ; with blocking text.
+                      ; and narrates the refusal itself as a :say event.
                       (make-map "did" "did:ma:me"
                                 "parent" "did:ma:world#room"
                                 "text" "The way is locked.")
@@ -1705,8 +1705,9 @@ fn production_avatar_go_blocked_exit_displays_locked_message() {
 
                 (go "mirror")
 
-                ; The exit was asked exactly once; the blocking text is shown
-                ; instead of a second, pointless re-entry into the same room.
+                ; The exit was asked exactly once; no pointless re-entry into
+                ; the same room, and go itself prints nothing (the exit's
+                ; :say event is the narration).
                 (assert (equal? calls
                     (list (list "did:ma:world#exit-mirror" "traverse"
                                 (list (make-map "did" "did:ma:me"
@@ -1717,7 +1718,7 @@ fn production_avatar_go_blocked_exit_displays_locked_message() {
 
     let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "avatar-go-blocked-ok");
-    assert_eq!(ctx.output.borrow().as_str(), "The way is locked.");
+    assert_eq!(ctx.output.borrow().as_str(), "");
 }
 
 #[test]

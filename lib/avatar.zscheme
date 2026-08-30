@@ -360,12 +360,12 @@
     (if (map? result)
       (let ((parent (map-ref result "parent" #f)))
         ; A locked exit (or one that leads nowhere) echoes the source room
-        ; back as `parent` with blocking text — only a *different* parent
-        ; room completes the move, so a same-room reply is shown, not
-        ; silently re-entered.
+        ; back as `parent` and narrates the refusal itself as a :say event —
+        ; only a *different* parent room completes the move, so a same-room
+        ; reply is neither re-entered nor re-printed here.
         (if (and parent (not (equal? parent (room))))
           (enter parent (#.my.ctx.nick))
-          (display (map-ref result "text" "You can't go that way."))))
+          #f))
       (display result)))
   nil)
 (define (dig . args)
