@@ -407,6 +407,29 @@ fn production_runtime_resolves_ctx_references() {
 }
 
 #[test]
+fn production_runtime_ack_predicate_distinguishes_bare_ok_ack() {
+    let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
+    let runtime = fs::read_to_string("lib/runtime.zscheme").unwrap();
+    let source = format!(
+        r#"
+        {stdlib}
+        {runtime}
+
+        ; The bare :ok ack and empty replies carry no payload.
+        (assert (ack? ":ok"))
+        (assert (ack? ()))
+        ; Payload replies — including the [:ok payload] tuple — do.
+        (assert (not (ack? "prop updated")))
+        (assert (not (ack? (list ":ok" "prop updated"))))
+        "ack-predicate-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "ack-predicate-ok");
+}
+
+#[test]
 fn production_avatar_resolves_exactly_one_exit_actor() {
     let source = ["stdlib", "runtime", "avatar"]
         .into_iter()

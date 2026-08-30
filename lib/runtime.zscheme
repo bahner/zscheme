@@ -21,6 +21,12 @@
 (define (actor-call actor method . args)
   (apply (string-append actor ":" method) args))
 
+;; A bare :ok ack — or an empty reply — is a success signal with no payload:
+;; nothing worth showing. Every verb-forwarding command shares this test so
+;; the ack is never conflated with a payload (or with Nil/()).
+(define (ack? reply)
+  (or (null? reply) (equal? reply ":ok")))
+
 ; `#root` is the direct-DID profile's fixed local trust anchor. Unlike
 ; optional runtime services, its address needs no service-directory lookup.
 (define (root)
