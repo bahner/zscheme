@@ -52,9 +52,36 @@ mod tests {
         parser::{parse_expr, tokenize},
         Ctx, Env, SchemeCtx, SchemeErr, SchemeVal,
     };
-    use std::rc::Rc;
+    use std::{path::Path, rc::Rc};
 
     struct StartupTestCtx;
+
+    fn read_repo_file(path: &str) -> std::io::Result<String> {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+    }
+
+    fn startup_scheme_source() -> String {
+        for path in ["lib/.z.scheme", "lib/z.scheme"] {
+            if let Ok(source) = read_repo_file(path) {
+                return source;
+            }
+        }
+
+        let mut source = String::new();
+        for path in [
+            "lib/stdlib.zscheme",
+            "lib/runtime.zscheme",
+            "lib/avatar.zscheme",
+            "lib/events.zscheme",
+        ] {
+            source.push_str(
+                &read_repo_file(path)
+                    .unwrap_or_else(|error| panic!("read startup layer {path}: {error}")),
+            );
+            source.push('\n');
+        }
+        source
+    }
 
     impl SchemeCtx for StartupTestCtx {
         fn eval_dot(&self, command: &str) -> Result<SchemeVal, SchemeErr> {
@@ -135,8 +162,7 @@ mod tests {
 
     #[test]
     fn generated_startup_scheme_parses() {
-        let source =
-            std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
+        let source = startup_scheme_source();
         let tokens = tokenize(&source).expect("tokenise generated startup Scheme");
         let mut position = 0;
         while position < tokens.len() {
@@ -148,8 +174,7 @@ mod tests {
 
     #[test]
     fn generated_startup_scheme_loads_and_resolves_default_pool() {
-        let mut source =
-            std::fs::read_to_string("lib/z.scheme").expect("read generated startup Scheme");
+        let mut source = startup_scheme_source();
         source.push_str("\n(default-pool)\n");
         let context: Ctx = Rc::new(StartupTestCtx);
         futures::executor::block_on(eval_source_in(&source, Env::new_root(), context))
