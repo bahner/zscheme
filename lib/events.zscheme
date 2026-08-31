@@ -140,6 +140,10 @@
 (define (event-emote ctx text)
   (display (string-append (event-name ctx) " " text)))
 
+; Ambient narration has no speaker: the room itself describes the scene.
+(define (event-narrate text)
+  (display text))
+
 ; Personal completion events — clear pending entry, display failure if any.
 (define (event-action-done action-ctx)
   (let ((id (map-ref action-ctx "id" #f))
@@ -196,6 +200,7 @@
             ":child" event-child
             ":say" event-say
             ":emote" event-emote
+            ":narrate" event-narrate
             ":dig" event-dig
             ":fill" event-fill
             ":parent" event-parent

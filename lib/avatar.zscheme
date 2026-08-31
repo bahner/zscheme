@@ -875,6 +875,10 @@
   (room-call "emote" (join-words words))
   nil)
 
+(define (narrate . words)
+  (room-call "narrate" (join-words words))
+  nil)
+
 (define (claim-usage-error)
   (error "usage: claim <object> [secret]"))
 
