@@ -1815,6 +1815,12 @@ fn production_parse_trigger_rule_builds_flat_terms() {
                 (define r4 (parse-trigger-rule (list "plain" ":arrive" "narrate" "Hei")))
                 (assert (equal? r4 (list "plain" ":arrive" "every" 1 "narrate" "Hei")))
 
+                ; Prose spans are translated to parts (the actor evaluates them).
+                (define r5 (parse-trigger-rule (list "first" ":arrive" "once" "narrate_to" "This is the first time you enter this room, (did-name)!")))
+                (assert (equal? r5 (list "first" ":arrive" "once" "narrate_to" "This is the first time you enter this room, " (list ":did-name") "!")))
+                (define r6 (parse-trigger-rule (list "farvel" ":arrive" "every" "10" "narrate" "Du har vært her (did-counter :arrive) ganger")))
+                (assert (equal? r6 (list "farvel" ":arrive" "every" 10 "narrate" "Du har vært her " (list ":did-counter" ":arrive") " ganger")))
+
                 ; Malformed rules raise the usage error.
                 (assert (equal? (guard (e (#t "raised")) (parse-trigger-rule (list "x")) "returned") "raised"))
                 (assert (equal? (guard (e (#t "raised")) (parse-trigger-rule (list "x" "c" "narrate")) "returned") "raised"))

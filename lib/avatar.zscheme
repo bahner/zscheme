@@ -893,6 +893,54 @@
           (if (and (string? did) (not (equal? did "none"))) did #f))
         #f)))
 
+;; ── Trigger text spans ──────────────────────────────────────────────────────
+;; The actor evaluates the text at fire time against its own counters; this
+;; layer only translates the human prose-with-spans into the structured parts
+;; the actor concatenates. Nothing here evaluates anything.
+
+(define (trigger-prefix? s p)
+  (and (>= (string-length s) (string-length p))
+       (equal? (substring s 0 (string-length p)) p)))
+
+(define (prose->parts text)
+  (let loop ((rest text) (acc '()))
+    (let ((open (string-index rest "(")))
+      (if (equal? open #f)
+          (if (equal? rest "")
+              (reverse acc)
+              (reverse (cons rest acc)))
+          (let* ((before (substring rest 0 open))
+                 (tail (substring rest (+ open 1) (string-length rest)))
+                 (close (string-index tail ")")))
+            (if (equal? close #f)
+                (error "unbalanced ( in trigger text")
+                (let* ((span (substring tail 0 close))
+                       (after (substring tail (+ close 1) (string-length tail)))
+                       (acc (if (equal? before "") acc (cons before acc))))
+                  (loop after (cons (span->form span) acc)))))))))
+
+(define (span->form span)
+  (let ((words (string-split span " ")))
+    (if (or (null? words) (equal? (car words) ""))
+        (error "empty trigger expression")
+        ; The head travels as a string (":did-name"); the actor normalises it
+        ; to a symbol, since ma-zscheme has no string->symbol.
+        (cons (string-append ":" (car words))
+              (map span-arg->value (cdr words))))))
+
+(define (span-arg->value w)
+  (cond ((and (>= (string-length w) 2)
+              (trigger-prefix? w "\"")
+              (equal? (substring w (- (string-length w) 1) (string-length w)) "\""))
+         (substring w 1 (- (string-length w) 1)))
+        ((and (>= (string-length w) 2)
+              (trigger-prefix? w "(")
+              (equal? (substring w (- (string-length w) 1) (string-length w)) ")"))
+         (span->form (substring w 1 (- (string-length w) 1))))
+        ((trigger-prefix? w ":") w)
+        ((string->number w) (string->number w))
+        (else (error (string-append "invalid trigger expression token: " w)))))
+
 (define (add-trigger . words)
   (let ((trigger (trigger-actor-did)))
     (if (not trigger)
@@ -920,11 +968,11 @@
              (cond-args (if cond-pair (car cond-pair) (list "every" 1)))
              (tail (if cond-pair (cdr cond-pair) tail))
              (method (car tail))
-             (text (join-words (cdr tail))))
-        (if (equal? text "")
+             (parts (prose->parts (join-words (cdr tail)))))
+        (if (null? parts)
             (error trigger-usage)
             (append (append (append (list id counter) did-args) cond-args)
-                    (list method text))))))
+                    (cons method parts))))))
 
 (define (avatar-did tail)
   (if (and (pair? tail) (equal? (car tail) "did") (pair? (cdr tail)))
