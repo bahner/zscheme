@@ -1791,6 +1791,42 @@ fn production_split_command_parses_reserved_keyword_slots() {
 }
 
 #[test]
+fn production_parse_trigger_rule_builds_flat_terms() {
+    let source = ["stdlib", "avatar"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                ; Flat positional rule with a numeric threshold.
+                (define r1 (parse-trigger-rule (list "salute" ":arrive" "every" "2" "narrate_to" "Velkommen" "tilbake")))
+                (assert (equal? r1 (list "salute" ":arrive" "every" 2 "narrate_to" "Velkommen tilbake")))
+
+                ; Explicit DID scope with a one-shot threshold.
+                (define r2 (parse-trigger-rule (list "joke" "num_jokes" "did" "did:ma:bob" "count" "3" "narrate" "Haha")))
+                (assert (equal? r2 (list "joke" "num_jokes" "did" "did:ma:bob" "count" 3 "narrate" "Haha")))
+
+                ; once carries no threshold; an absent condition defaults to every 1.
+                (define r3 (parse-trigger-rule (list "first" ":arrive" "once" "narrate" "Velkommen")))
+                (assert (equal? r3 (list "first" ":arrive" "once" "narrate" "Velkommen")))
+                (define r4 (parse-trigger-rule (list "plain" ":arrive" "narrate" "Hei")))
+                (assert (equal? r4 (list "plain" ":arrive" "every" 1 "narrate" "Hei")))
+
+                ; Malformed rules raise the usage error.
+                (assert (equal? (guard (e (#t "raised")) (parse-trigger-rule (list "x")) "returned") "raised"))
+                (assert (equal? (guard (e (#t "raised")) (parse-trigger-rule (list "x" "c" "narrate")) "returned") "raised"))
+                "parse-trigger-rule-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "parse-trigger-rule-ok");
+}
+
+#[test]
 fn production_forge_rejects_did_name() {
     let source = ["stdlib", "runtime", "avatar"]
         .into_iter()
