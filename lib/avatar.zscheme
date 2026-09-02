@@ -114,6 +114,11 @@
 
 (define (exit-pool room) (room-child-kind-pool room "exit"))
 
+; The trigger kind appears only in look's "Triggers:" presentation, never in
+; who?/occupants?/things?/exits? — those pools are kind-filtered.
+(define (trigger-pool room)
+  (room-child-kind-pool room "trigger"))
+
 ; Cheap first (search what we already have cached), fresh only if needed:
 ; one `look` round-trip at most per resolve, never one per candidate.
 ; Returns #f rather than erroring when nothing matches here, so a caller can
@@ -429,8 +434,20 @@
     nil))
 
 (define (enter target nick)
-  (let ((result (apply-entry-ctx! (actor-call target "enter" nick))))
-    (if (map? result) (look) (display result)))
+  (let ((old-room (guard (e (#t #f)) (room))))
+    (let ((result (apply-entry-ctx! (actor-call target "enter" nick))))
+      (when (and (map? result)
+                 (starts-with-did? old-room)
+                 (not (equal? old-room (room))))
+        ; A completed move to a different room ends presence in the previous
+        ; one: tell it we left, so it forgets us and broadcasts :leave.
+        ; Without this the old room keeps a stale child — its trigger never
+        ; counts the departure, and a later return is an "unchanged re-entry"
+        ; that broadcasts no :arrive either. Best-effort: a stale or
+        ; unreachable old room must not fail the move.
+        (guard (e (#t #f))
+          (actor-call old-room "leave")))
+      (if (map? result) (look) (display result))))
   nil)
 
 ;; ── Parent/child transfer handshake ─────────────────────────────────────────

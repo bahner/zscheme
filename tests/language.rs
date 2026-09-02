@@ -150,6 +150,37 @@ fn production_events_render_humans_and_agents_as_occupants() {
 }
 
 #[test]
+fn production_event_look_renders_every_published_trigger() {
+    // Visibility is the room's decision alone: it never publishes `visible:
+    // false` children in the first place. The client must not re-check the
+    // `visible` prop — it renders exactly the children the room published.
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (event-look
+                    (make-map "name" "Atrium" "description" "Quiet."
+                              "children"
+                              (list (make-map "actor" "did:ma:world#step" "kind" "trigger"
+                                              "name" "staircase-trigger" "visible" "true")
+                                    (make-map "actor" "did:ma:world#secret" "kind" "trigger"
+                                              "name" "hidden-trigger" "visible" "false"))))
+                "#
+    );
+
+    let (_, ctx) = eval(&source).unwrap();
+    assert_eq!(
+        ctx.output.borrow().as_str(),
+        "Atrium\nQuiet.\nThe room appears to be empty.\nTriggers:\nstaircase-trigger\nhidden-trigger"
+    );
+}
+
+#[test]
 fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
@@ -368,6 +399,26 @@ fn unit_stdlib_provides_list_accessors() {
 
     let (value, _) = eval(&source).unwrap();
     assert_eq!(value.display(), "list-accessors-ok");
+}
+
+#[test]
+fn unit_stdlib_join_words_normalises_typed_literals() {
+    // The terminal shorthand passes numbers and booleans as typed values;
+    // join-words must render them as text instead of crashing string-append.
+    let stdlib = fs::read_to_string("lib/stdlib.zscheme").unwrap();
+    let source = format!(
+        r#"
+        {stdlib}
+
+        (assert (equal? (join-words '("a" 5 2.5 #t #f)) "a 5 2.5 #t #f"))
+        (assert (equal? (join-words '(())) ""))
+        (assert (equal? (join-words '()) ""))
+        "join-words-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "join-words-ok");
 }
 
 #[test]
@@ -598,6 +649,52 @@ fn avatar_command_test_source() -> String {
 fn production_avatar_commands_accept_representative_arguments() {
     let (value, _) = eval(&avatar_command_test_source()).unwrap();
     assert_eq!(value.display(), "avatar-commands-ok");
+}
+
+#[test]
+fn production_avatar_enter_leaves_previous_room() {
+    // A move into a different room ends presence in the previous one: the
+    // avatar must tell the old room it left, or the room keeps a stale child
+    // (its trigger never counts the departure, and a later return broadcasts
+    // no :arrive either — it is an "unchanged re-entry").
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.runtime: "did:ma:world")
+                (#.my.ctx.room: "did:ma:world#room")
+                (#.my.ctx.nick: "tester")
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((equal? method "enter")
+                           (make-map "parent" "did:ma:world#room-b" "nick" "tester"))
+                          (else ())))
+
+                (define (smoke name thunk)
+                    (guard (failure (#t (error (string-append name ": " failure))))
+                        (thunk)))
+
+                (smoke "enter" (lambda () (enter "did:ma:world#room-b" "tester")))
+                ; The move completed and the previous room was told to :leave.
+                (assert (equal? (#.my.ctx.room) "did:ma:world#room-b"))
+                (assert (member? (list "did:ma:world#room" "leave" ()) calls))
+                ; Re-entering the same room must not :leave it.
+                (set! calls ())
+                (smoke "enter same" (lambda () (enter "did:ma:world#room-b" "tester")))
+                (assert (not (member? (list "did:ma:world#room-b" "leave" ()) calls)))
+                "avatar-enter-leaves-old-room"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-enter-leaves-old-room");
 }
 
 #[test]

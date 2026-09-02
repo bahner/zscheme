@@ -56,14 +56,16 @@
         (description (map-ref room "description" ""))
         (occupants (occupant-pool room))
         (things (thing-pool room))
-        (exits (exit-pool room)))
+        (exits (exit-pool room))
+        (triggers (trigger-pool room)))
     (display
       (string-append
         name
         (if (string? description) (string-append "\n" description) "")
         (event-list-lines "\nOccupants:" occupants event-name)
         (event-things-lines "\n" things "The room appears to be empty.")
-        (event-exit-lines "\nExits:" exits)))))
+        (event-exit-lines "\nExits:" exits)
+        (event-list-lines "\nTriggers:" triggers event-name)))))
 
 (define (event-exits exits)
   (display (string-append "Exits:" (event-exit-lines "" exits))))

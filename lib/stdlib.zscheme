@@ -174,8 +174,20 @@
 (define (string-lines s)   (string-split s "\n"))
 (define (string-unlines l) (string-join l "\n"))
 
+;; Words from the terminal shorthand arrive as typed literals (numbers,
+;; booleans, nil), not just strings; normalise each to its text form so
+;; speech verbs and error descriptions never feed a non-string to
+;; string-append.
 (define (join-words words)
-  (string-join words " "))
+  (string-join
+    (map (lambda (word)
+           (cond ((string? word) word)
+                 ((number? word) (number->string word))
+                 ((boolean? word) (if word "#t" "#f"))
+                 ((null? word) "")
+                 (else (error "join-words: not a word"))))
+         words)
+    " "))
 
 ;; Return the human-facing title line from a multi-line actor reply.
 (define (first-line text)
