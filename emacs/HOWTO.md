@@ -91,7 +91,7 @@ it directly in Elisp:
 
 ## Runtime and room examples
 
-Assume `@sky` is the runtime alias and `#construct` is the room:
+Assume `@sky` is the runtime alias and `#concourse` is the room:
 
 ```elisp
 (require 'ma)
@@ -99,7 +99,7 @@ Assume `@sky` is the runtime alias and `#construct` is the room:
 (ma-connect)
 
 (setq ma-runtime "@sky")
-(setq ma-room (concat ma-runtime "#construct"))
+(setq ma-room (concat ma-runtime "#concourse"))
 ```
 
 Enter by calling the room directly. Lambda-ma rooms do not require ordinary
@@ -110,7 +110,7 @@ for user commands.
 
 ```elisp
 (ma-eval
- "(rpc-send \"@sky#construct\" \"enter\"
+ "(rpc-send \"@sky#concourse\" \"enter\"
    (make-map \"name\" \"alice\"
           \"nick\" \"alice\"
           \"description\" \"A zscheme user.\"))")
