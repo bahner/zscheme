@@ -35,7 +35,7 @@ strings, with repeated DIDs collapsed before it crosses the avatar boundary.
 Events do not belong to the runtime as an authoritative semantic surface. They
 are a client-side, Zion-facing convenience stream: a human terminal can consume
 room broadcasts / `:print`-style traffic as a narrative overlay, while the
-runtime answers ordinary RPC/data questions through `ma-reply!` and structured
+runtime answers ordinary message/data questions through `ma-reply!` and structured
 ctx maps. In other words, the event channel is consumer-visible machinery for
 Zion, not a second world protocol to be reified in the runtime library.
 
@@ -54,7 +54,7 @@ The host delivers typed unsolicited events but must not sequence `:hold`,
 `on-event` in zscheme owns `:parent` handshakes and every
 container/duckie/object-transfer decision.
 
-The host forwards **every** unsolicited RPC term, not a curated subset, and no
+The host forwards **every** unsolicited actor term, not a curated subset, and no
 longer validates argument shapes. `on-event` is therefore the only filter:
 unknown verbs must be ignored silently, and a handler must not assume its
 arguments have the shape a well-behaved actor would send. Treat every event
@@ -73,8 +73,8 @@ the user can rephrase or supply an exact address. An ambiguous candidate also
 shows `in inventory` when its ctx parent matches `.my.ctx.inv`, or `in <room
 name>` when its parent matches the cached room ctx actor. Other parents are not
 looked up or labelled. A bare DID has no identity actor, so `look` renders the
-resolved child ctx rather than requiring an RPC.
-Ordinary object RPC verbs dispatch through `(command object method . params)`;
+resolved child ctx rather than requiring a message round-trip.
+Ordinary object actor verbs dispatch through `(command object method . params)`;
 do not duplicate `resolve-one` plus `actor-call` in each command wrapper.
 `look <object>` uses the same room-plus-inventory candidate pool, but renders
 the resolved child ctx locally rather than calling the target actor.
@@ -111,7 +111,7 @@ Inside Scheme parentheses, programs use hash-dot local paths exclusively: `#.my.
 - `ipfs-cat` uses `SchemeCtx::fetch_path` and returns UTF-8 text.
 - `ipfs-name-resolve` uses `SchemeCtx::resolve_ipns` and returns an `/ipfs/<cid>` reference without loading content.
 - `include` is the only one of these operations that evaluates fetched Scheme source.
-- Preserve `SchemeVal::Bytes` as CBOR byte strings and string-keyed maps as CBOR maps in RPC traffic.
+- Preserve `SchemeVal::Bytes` as CBOR byte strings and string-keyed maps as CBOR maps in message traffic.
 - Delegate IPNS gateway selection and resolution metadata parsing to the shared `ma_core::IpfsGatewayResolver`; do not duplicate it in `CliCtx`.
 
 For unreleased cross-repository APIs, validate with temporary Cargo `--config patch.crates-io.<crate>.path=...` overrides and leave `Cargo.toml` and `Cargo.lock` on registry sources.
