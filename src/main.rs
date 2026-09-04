@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ma_core::config::{Config, MaArgs, SecretBundle};
 use ma_core::ipfs::{DidDocumentPublishOptions, IpfsDidPublisher, RemotePinOptions};
-use ma_core::{IpfsGatewayResolver, MaExtension, RPC_PROTOCOL_ID};
+use ma_core::{IpfsGatewayResolver, MaExtension, INBOX_PROTOCOL_ID};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 use tokio::task::spawn_local;
 use tracing::{info, warn};
@@ -48,10 +48,10 @@ struct Cli {
     #[arg(long, default_value = DEFAULT_GATEWAY_URL, env = "ZSCHEME_GATEWAY")]
     gateway: String,
 
-    /// How often to drain the iroh RPC inbox for actor-call replies (milliseconds).
+    /// How often to drain the iroh inbox for actor-call replies (milliseconds).
     /// Lower values reduce latency for (@actor verb) and (rpc-send …) calls.
-    #[arg(long, default_value_t = 50, env = "ZSCHEME_RPC_POLL_MS")]
-    rpc_poll_ms: u64,
+    #[arg(long, default_value_t = 50, env = "ZSCHEME_POLL_MS")]
+    poll_ms: u64,
 
     /// Use a fresh per-connection Scheme environment instead of the shared
     /// daemon session environment.
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
         true,
     )
     .await?;
-    let rpc_inbox = endpoint.service(RPC_PROTOCOL_ID);
+    let inbox = endpoint.service(INBOX_PROTOCOL_ID);
 
     // ── DID document ────────────────────────────────────────────────────────
     let ma_ext = endpoint.ma_extension().kind("agent");
@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
         signing_key_bytes,
         endpoint,
         resolver,
-        rpc_inbox,
+        inbox,
         kubo_rpc_url: core_config.kubo_rpc_url.clone(),
     });
 
@@ -203,13 +203,9 @@ async fn main() -> Result<()> {
             ma_ext,
             publication_secrets.expect("daemon publication bundle"),
         );
-        local
-            .run_until(daemon_main(ctx, img, cli.rpc_poll_ms))
-            .await
+        local.run_until(daemon_main(ctx, img, cli.poll_ms)).await
     } else {
-        local
-            .run_until(async_main(ctx, script, cli.rpc_poll_ms))
-            .await
+        local.run_until(async_main(ctx, script, cli.poll_ms)).await
     }
 }
 
@@ -220,14 +216,14 @@ async fn daemon_main(
     poll_ms: u64,
 ) -> Result<()> {
     init_session_env();
-    spawn_rpc_poll_loop(ctx.clone(), poll_ms);
+    spawn_poll_loop(ctx.clone(), poll_ms);
     let result = daemon::run(ctx.clone(), img).await;
     ctx.close().await;
     result
 }
 
 async fn async_main(
-    ctx: std::rc::Rc<CliCtx>, // Rc<CliCtx> for poll_rpc_replies access
+    ctx: std::rc::Rc<CliCtx>, // Rc<CliCtx> for poll_replies access
     script: Option<std::path::PathBuf>,
     poll_ms: u64,
 ) -> Result<()> {
@@ -237,8 +233,8 @@ async fn async_main(
     // Coerce to Ctx (= Rc<dyn SchemeCtx>) for the evaluator.
     let scheme_ctx: Ctx = ctx.clone();
 
-    // Start the RPC reply poll loop.
-    spawn_rpc_poll_loop(ctx.clone(), poll_ms);
+    // Start the reply poll loop.
+    spawn_poll_loop(ctx.clone(), poll_ms);
 
     // Execute script or REPL, then close the endpoint cleanly.
     let result = if let Some(ref path) = script {
@@ -250,13 +246,13 @@ async fn async_main(
     result
 }
 
-/// Spawn the periodic RPC-inbox drain that routes replies to waiting calls.
-fn spawn_rpc_poll_loop(ctx: std::rc::Rc<CliCtx>, poll_ms: u64) {
+/// Spawn the periodic inbox drain that routes replies to waiting calls.
+fn spawn_poll_loop(ctx: std::rc::Rc<CliCtx>, poll_ms: u64) {
     spawn_local(async move {
         let interval = Duration::from_millis(poll_ms);
         loop {
             tokio::time::sleep(interval).await;
-            ctx.poll_rpc_replies();
+            ctx.poll_replies();
         }
     });
 }

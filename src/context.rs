@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::{channel::oneshot, future::LocalBoxFuture};
-use ma_core::{Did, IpfsGatewayResolver, Message, SigningKey, RPC_PROTOCOL_ID};
+use ma_core::{Did, IpfsGatewayResolver, Message, SigningKey, INBOX_PROTOCOL_ID};
 use ma_zscheme::{
     parse_actor_command, parse_dot_command, DotOp, DotRegistry, SchemeCtx, SchemeErr, SchemeVal,
 };
@@ -29,11 +29,11 @@ pub struct CliCtx {
     pub endpoint: tokio::sync::Mutex<Box<dyn ma_core::MaEndpoint>>,
     /// DID resolver for looking up actor endpoints.
     pub resolver: Arc<IpfsGatewayResolver>,
-    /// Pending RPC reply senders keyed by message id.
+    /// Pending reply senders keyed by message id.
     pub reply_senders: RefCell<HashMap<String, oneshot::Sender<Result<SchemeVal, String>>>>,
 
-    /// RPC inbox for receiving replies.
-    pub rpc_inbox: RefCell<ma_core::Inbox<Message>>,
+    /// Inbox for receiving replies.
+    pub inbox: RefCell<ma_core::Inbox<Message>>,
     /// Kubo RPC base URL (e.g. `http://127.0.0.1:5001`).
     pub kubo_rpc_url: String,
     /// reqwest client (reused for local Kubo cat calls).
@@ -55,8 +55,8 @@ pub struct CliCtxInit {
     pub endpoint: Box<dyn ma_core::MaEndpoint>,
     /// DID resolver for target lookup.
     pub resolver: Arc<IpfsGatewayResolver>,
-    /// RPC inbox for receiving replies.
-    pub rpc_inbox: ma_core::Inbox<Message>,
+    /// Inbox for receiving replies.
+    pub inbox: ma_core::Inbox<Message>,
     /// Kubo RPC base URL.
     pub kubo_rpc_url: String,
 }
@@ -78,7 +78,7 @@ impl CliCtx {
             endpoint: tokio::sync::Mutex::new(init.endpoint),
             resolver: init.resolver,
             reply_senders: RefCell::new(HashMap::new()),
-            rpc_inbox: RefCell::new(init.rpc_inbox),
+            inbox: RefCell::new(init.inbox),
             kubo_rpc_url: init.kubo_rpc_url,
             http: reqwest::Client::new(),
             display_sink: RefCell::new(None),
@@ -122,8 +122,8 @@ impl CliCtx {
         Ok((sender, signing_key))
     }
 
-    /// Send an RPC to `target#verb(args)` and await the reply.
-    async fn do_rpc_call(
+    /// Send an actor message to `target#verb(args)` and await the reply.
+    async fn do_actor_call(
         &self,
         target: &str,
         verb: &str,
@@ -138,21 +138,19 @@ impl CliCtx {
         match receiver.await {
             Ok(Ok(val)) => Ok(val),
             Ok(Err(e)) => Err(SchemeErr::MaError(e)),
-            Err(_) => Err(SchemeErr::MaError(
-                "RPC reply channel cancelled".to_string(),
-            )),
+            Err(_) => Err(SchemeErr::MaError("reply channel cancelled".to_string())),
         }
     }
 
-    /// Drain the RPC inbox and route replies to waiting `oneshot` senders.
+    /// Drain the inbox and route replies to waiting `oneshot` senders.
     /// Call periodically from the poll loop in main.rs.
-    pub fn poll_rpc_replies(&self) {
+    pub fn poll_replies(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        let messages: Vec<Message> = self.rpc_inbox.borrow_mut().drain(now);
+        let messages: Vec<Message> = self.inbox.borrow_mut().drain(now);
 
         for msg in messages {
             let reply_to = match &msg.reply_to {
@@ -160,7 +158,7 @@ impl CliCtx {
                 None => continue,
             };
             let payload = msg.payload();
-            let reply_result = decode_rpc_reply(&payload);
+            let reply_result = decode_reply(&payload);
             if let Some(sender) = self.reply_senders.borrow_mut().remove(&reply_to) {
                 let _ = sender.send(reply_result);
             }
@@ -298,7 +296,7 @@ impl SchemeCtx for CliCtx {
                 parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
             };
             let scheme_args: Vec<SchemeVal> = str_args.into_iter().map(SchemeVal::Str).collect();
-            self.do_rpc_call(&target, &verb, &scheme_args).await
+            self.do_actor_call(&target, &verb, &scheme_args).await
         })
     }
 
@@ -313,7 +311,7 @@ impl SchemeCtx for CliCtx {
                 let cfg = self.config.borrow();
                 parse_actor_command(&effective, &**cfg).map_err(SchemeErr::MaError)?
             };
-            self.do_rpc_call(&target, &verb, args).await
+            self.do_actor_call(&target, &verb, args).await
         })
     }
 
@@ -326,7 +324,7 @@ impl SchemeCtx for CliCtx {
         if let Err(error) = Did::validate_url(target) {
             return Box::pin(futures::future::ready(Err(error.to_string())));
         }
-        let (sender, signing_key) = match self.build_signing_key("rpc") {
+        let (sender, signing_key) = match self.build_signing_key("inbox") {
             Ok(pair) => pair,
             Err(e) => return Box::pin(futures::future::ready(Err(e))),
         };
@@ -352,7 +350,7 @@ impl SchemeCtx for CliCtx {
         let msg = match ma_core::Message::new(
             &sender,
             target,
-            ma_core::MESSAGE_TYPE_RPC,
+            ma_core::MESSAGE_TYPE_MESSAGE,
             ma_core::CONTENT_TYPE_TERM,
             &body,
             &signing_key,
@@ -367,7 +365,7 @@ impl SchemeCtx for CliCtx {
             let mut outbox = {
                 let endpoint = self.endpoint.lock().await;
                 endpoint
-                    .outbox(resolver.as_ref(), &target_owned, RPC_PROTOCOL_ID)
+                    .outbox(resolver.as_ref(), &target_owned, INBOX_PROTOCOL_ID)
                     .await
                     .map_err(|e| e.to_string())?
             };
@@ -506,7 +504,7 @@ fn cbor_to_scheme_val(v: &ciborium::Value) -> SchemeVal {
     }
 }
 
-fn decode_rpc_reply(payload: &[u8]) -> Result<SchemeVal, String> {
+fn decode_reply(payload: &[u8]) -> Result<SchemeVal, String> {
     use ciborium::Value as V;
     let val: V = match ciborium::de::from_reader(payload) {
         Ok(v) => v,
@@ -544,7 +542,7 @@ fn decode_rpc_reply(payload: &[u8]) -> Result<SchemeVal, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cbor_to_scheme_val, decode_rpc_reply, scheme_val_to_cbor};
+    use super::{cbor_to_scheme_val, decode_reply, scheme_val_to_cbor};
     use ciborium::Value as V;
     use ma_zscheme::SchemeVal;
 
@@ -566,7 +564,7 @@ mod tests {
     #[test]
     fn bare_ok_ack_is_preserved_as_an_atom_not_nil() {
         assert!(matches!(
-            decode_rpc_reply(&cbor_bytes(&V::Text(":ok".to_string()))).unwrap(),
+            decode_reply(&cbor_bytes(&V::Text(":ok".to_string()))).unwrap(),
             SchemeVal::Str(s) if s == ":ok"
         ));
     }
@@ -574,7 +572,7 @@ mod tests {
     #[test]
     fn empty_ok_array_is_the_array_form_of_the_bare_ack() {
         assert!(matches!(
-            decode_rpc_reply(&cbor_bytes(&V::Array(vec![V::Text(":ok".to_string())]))).unwrap(),
+            decode_reply(&cbor_bytes(&V::Array(vec![V::Text(":ok".to_string())]))).unwrap(),
             SchemeVal::Str(s) if s == ":ok"
         ));
     }
@@ -582,7 +580,7 @@ mod tests {
     #[test]
     fn ok_array_with_payload_returns_the_payload() {
         assert!(matches!(
-            decode_rpc_reply(&cbor_bytes(&V::Array(vec![
+            decode_reply(&cbor_bytes(&V::Array(vec![
                 V::Text(":ok".to_string()),
                 V::Text("prop updated".to_string()),
             ])))
@@ -594,7 +592,7 @@ mod tests {
     #[test]
     fn error_array_returns_the_reason() {
         assert_eq!(
-            decode_rpc_reply(&cbor_bytes(&V::Array(vec![
+            decode_reply(&cbor_bytes(&V::Array(vec![
                 V::Text(":error".to_string()),
                 V::Text("not authorised to edit props".to_string()),
             ])))

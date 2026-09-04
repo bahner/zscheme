@@ -27,7 +27,7 @@ use crate::ipc::{
 use crate::scheme::{SchemeErr, SchemeVal};
 
 /// Run the daemon accept loop. Assumes the caller already built the full
-/// `CliCtx` (endpoint, inbox, config) and started the RPC reply poll loop.
+/// `CliCtx` (endpoint, inbox, config) and started the reply poll loop.
 ///
 /// If another daemon is running it is asked to stop first (takeover).
 /// `img`, when given, is a session-image file: it is evaluated into the
