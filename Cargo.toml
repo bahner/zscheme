@@ -21,7 +21,7 @@ ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 getrandom = "0.3"
-ma-core = { version = "^0.14.4", default-features = false, features = ["config", "iroh", "kubo"] }
+ma-core = { version = "^0.15", default-features = false, features = ["config", "iroh", "kubo"] }
 ma-zscheme = "0.7"
 ma-zscheme-yaml = "0.6"
 directories = "6"
