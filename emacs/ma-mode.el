@@ -32,7 +32,7 @@
    scheme-font-lock-keywords-2
    `((,(regexp-opt '("define" "lambda" "let" "let*" "letrec" "if" "cond"
                      "begin" "and" "or" "when" "unless" "set!" "quote"
-                     "guard" "include" "rpc-send" "ok?" "ok-val" "err?"
+                     "guard" "include" "actor-send" "ok?" "ok-val" "err?"
                      "err-msg") 'symbols)
       . font-lock-keyword-face)
      ("\\_<[@.][^][() \t\n]+" . font-lock-constant-face)

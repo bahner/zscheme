@@ -49,7 +49,7 @@ struct Cli {
     gateway: String,
 
     /// How often to drain the iroh inbox for actor-call replies (milliseconds).
-    /// Lower values reduce latency for (@actor verb) and (rpc-send …) calls.
+    /// Lower values reduce latency for (@actor verb) and (actor-send …) calls.
     #[arg(long, default_value_t = 50, env = "ZSCHEME_POLL_MS")]
     poll_ms: u64,
 

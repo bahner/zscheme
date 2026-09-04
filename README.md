@@ -102,9 +102,9 @@ archive is sent to that remote pinning service.
 ; @ syntax — auto-unwraps the reply value:
 (@sky#room:look)                      ; → "You are in a quiet room."
 
-; rpc-send — returns a raw (:ok …) / (:error …) tuple:
-(rpc-send "@sky#room" ":look")       ; → (:ok "You are in a quiet room.")
-(ok-reply? (rpc-send "@sky#ping" ":ping"))      ; → #t
+; actor-send — returns a raw (:ok …) / (:error …) tuple:
+(actor-send "@sky#room" ":look")       ; → (:ok "You are in a quiet room.")
+(ok-reply? (actor-send "@sky#ping" ":ping"))      ; → #t
 ```
 
 ### Entering a world
@@ -122,7 +122,7 @@ archive is sent to that remote pinning service.
          (ctx     (make-map "name" alias
                             "nick" alias
                             "description" "A zscheme user."))
-         (result  (rpc-send target ":enter" ctx)))
+         (result  (actor-send target ":enter" ctx)))
     (if (ok? result)
         (begin (use target) (ok-val result))
         (error (err-msg result)))))

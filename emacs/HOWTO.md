@@ -110,7 +110,7 @@ for user commands.
 
 ```elisp
 (ma-eval
- "(rpc-send \"@sky#concourse\" \"enter\"
+ "(actor-send \"@sky#concourse\" \"enter\"
    (make-map \"name\" \"alice\"
           \"nick\" \"alice\"
           \"description\" \"A zscheme user.\"))")

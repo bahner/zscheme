@@ -130,7 +130,7 @@ impl CliCtx {
         args: &[SchemeVal],
     ) -> Result<SchemeVal, SchemeErr> {
         let msg_id = self
-            .send_rpc(target, verb, args)
+            .send_actor(target, verb, args)
             .await
             .map_err(SchemeErr::MaError)?;
         let (sender, receiver) = oneshot::channel::<Result<SchemeVal, String>>();
@@ -315,7 +315,7 @@ impl SchemeCtx for CliCtx {
         })
     }
 
-    fn send_rpc<'a>(
+    fn send_actor<'a>(
         &'a self,
         target: &'a str,
         verb: &'a str,

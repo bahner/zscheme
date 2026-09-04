@@ -34,9 +34,9 @@ a per-connection environment. TIMEOUT is in seconds."
   (ma-eval (format "(.%s:)" (ma--dot-source path))))
 
 (defun ma-rpc (target verb &rest args)
-  "Call TARGET with RPC VERB and ARGS via zscheme."
+  "Call TARGET with actor verb and ARGS via zscheme."
   (ma-eval
-   (format "(rpc-send %s %s%s)"
+   (format "(actor-send %s %s%s)"
            (ma--quote-zscheme-string target)
            (ma--quote-zscheme-string verb)
            (if args

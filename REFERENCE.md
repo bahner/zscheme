@@ -221,7 +221,7 @@ with `#`, the argument is appended without a space to form the fragment address:
 ```
 
 The `@` actor syntax auto-unwraps replies: success returns `String`,
-failure raises `SchemeErr`. Use `rpc-send` for explicit tuple handling.
+failure raises `SchemeErr`. Use `actor-send` for explicit tuple handling.
 
 ---
 
@@ -385,10 +385,10 @@ Pipe only works on values produced by Scheme expressions and RPC calls.
 These functions provide explicit control over ma message sending and return
 structured reply tuples rather than auto-unwrapped strings.
 
-### `rpc-send`
+### `actor-send`
 
 ```scheme
-(rpc-send target verb arg…) → (:ok value) | (:error reason) | (:timeout)
+(actor-send target verb arg…) → (:ok value) | (:error reason) | (:timeout)
 ```
 
 Sends an RPC and **blocks** (cooperatively) until the reply arrives.

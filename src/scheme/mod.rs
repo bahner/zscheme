@@ -124,7 +124,7 @@ mod tests {
             Box::pin(async { Ok(SchemeVal::Map(std::collections::BTreeMap::default())) })
         }
 
-        fn send_rpc<'a>(
+        fn send_actor<'a>(
             &'a self,
             _target: &'a str,
             _verb: &'a str,

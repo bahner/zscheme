@@ -97,10 +97,10 @@ When a config lookup returns a DID, you can use it as a function:
 (sky "#room:look")                ; sends to did:ma:…#room:look
 ```
 
-### `rpc-send` for explicit error handling
+### `actor-send` for explicit error handling
 
 ```scheme
-(define result (rpc-send "@sky#room" ":look"))
+(define result (actor-send "@sky#room" ":look"))
 (if (ok-reply? result)
   (display (ok-val result))
     (error (err-msg result)))
@@ -153,7 +153,7 @@ Map keys are strings, and update operations return a new map value.
 Maps are useful for actor calls that expect structured CBOR terms:
 
 ```scheme
-(rpc-send "@sky#room" ":describe"
+(actor-send "@sky#room" ":describe"
           (make-map "name" "Garden"
                     "description" "A quiet place under glass."))
 ```
@@ -239,7 +239,7 @@ Store a navigation script (see [`lib/stdlib.zscheme`](lib/stdlib.zscheme) for `s
          (ctx     (make-map "name" alias
                             "nick" alias
                             "description" "A zscheme user."))
-         (result  (rpc-send target ":enter" ctx)))
+         (result  (actor-send target ":enter" ctx)))
     (if (ok-reply? result)
         (begin (use target) (ok-val result))
         (error (err-msg result)))))
@@ -275,11 +275,11 @@ The `@` shorthand raises on error (suitable for interactive use):
 (@sky#ping)   ; raises SchemeErr if :ping fails
 ```
 
-Use `rpc-send` when you need to handle errors gracefully:
+Use `actor-send` when you need to handle errors gracefully:
 
 ```scheme
 (define (safe-ping target)
-  (let ((r (rpc-send target ":ping")))
+  (let ((r (actor-send target ":ping")))
     (if (ok-reply? r) "online" "offline")))
 
 (safe-ping "@sky")   ; → "online" or "offline"
@@ -358,7 +358,7 @@ restored automatically.
 (define ROOM   "#room")
 (define SKY    (#.my.aliases.sky))
 
-(rpc-send (string-append SKY ROOM) ":look")
+(actor-send (string-append SKY ROOM) ":look")
 ```
 
 ### Combining results
@@ -366,7 +366,7 @@ restored automatically.
 ```scheme
 (define sky (#.my.aliases.sky))
 (define room (string-append sky "#room"))
-(rpc-send room ":look")
+(actor-send room ":look")
 ```
 
 ### URL sharing
