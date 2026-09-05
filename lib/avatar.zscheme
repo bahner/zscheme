@@ -379,6 +379,17 @@
 (define (fill direction)
   (room-call "fill" direction))
 
+; Look through an exit without traversing it: `delve <direction>` fetches the
+; exit's destination (`:to?`) and shows that room's name (`:name?`). A dangling
+; exit reports it leads nowhere; an unreachable destination surfaces as the
+; ordinary `:name?` actor-call error.
+(define (delve direction)
+  (let ((target (actor-call (resolve-exit direction) "to?")))
+    (if (and (string? target) (starts-with-did? target))
+        (display (actor-call target "name?"))
+        (display "This exit leads nowhere.")))
+  nil)
+
 ;; ── Command grammar ──────────────────────────────────────────────────────────
 ;; The reserved-keyword commands (`take … from …`, `put … in …`, `give … to …`,
 ;; `tell … to …`, `name … as …`) all share one shape: words split by a hard
@@ -1231,6 +1242,7 @@
         "remove <child...>       owner repairs a stale room child\n"
         "dig <direction>         create a new exit\n"
         "fill <direction>        remove an exit\n"
+        "delve <direction>       look through an exit at its destination\n"
         "forge <kind> named <name...>  create a new thing in your hand (drops current held item first)\n"
         "enter <target> <nick>   enter a room directly by address\n"
         "start-here              trigger the current room to cascade :here to its children\n"
