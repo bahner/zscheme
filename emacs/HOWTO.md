@@ -137,7 +137,7 @@ Room control methods go directly to the room:
 
 ### Add one room method
 
-Emacs can edit local zscheme paths directly. It does not yet have zion's
+Emacs can edit local zscheme paths directly. It does not yet have operator's
 integrated `:behaviour!edit` publishing flow, so the current path is: edit
 locally, publish the file to IPFS, then point the room at the returned
 `/ipfs/<cid>`.
@@ -204,7 +204,7 @@ Emacs opens a buffer in a new frame. Edit the text normally. Then:
   open.
 - `C-c C-k` closes the edit buffer.
 
-This is deliberately different from zion's modal editor flow: you can keep a
+This is deliberately different from operator's modal editor flow: you can keep a
 document open, edit, save, test, edit again, and save again without reopening
 the editor every time.
 

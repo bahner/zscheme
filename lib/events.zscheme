@@ -3,7 +3,7 @@
 ; This layer owns both structured-data presentation and unsolicited event
 ; dispatch. Avatar commands reuse these formatters for solicited query replies.
 ;
-; Keeping text here matters: runtime hands clients data, while this Zion-facing
+; Keeping text here matters: runtime hands clients data, while this Operator-facing
 ; layer decides what a human sees. No string below is part of the wire contract.
 
 ;; ── Presentation helpers ────────────────────────────────────────────────────

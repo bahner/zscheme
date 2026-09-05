@@ -7,12 +7,18 @@ actor platform.
 
 ## What is zscheme
 
-zscheme is a Lisp/Scheme dialect embedded in `zion`, the browser-based
+zscheme is a Lisp/Scheme dialect embedded in `operator`, the browser-based
 `did:ma:` actor workstation. It lets you compose, automate, and script
 interactions with the distributed actor network using standard Scheme syntax.
 
-Any command line in `zion` containing `(…)` is pre-processed by the evaluator
+Any command line in `operator` containing `(…)` is pre-processed by the evaluator
 before normal dispatch. Results are spliced back as strings into the command.
+
+> **A note on the name.** The `z` in `zscheme` is a historical curiosity: it
+> comes from the workstation's old name, *Zion* — `zscheme` was short for
+> "Zion Scheme". The workstation is now called `operator`, but the language kept
+> the `z` simply because it is a nice name with a `z` in it. (Some of us still
+> joke that it stands for "Zorglub Scheme".)
 
 ```scheme
 ; Inline substitution — result becomes part of the command
@@ -176,7 +182,7 @@ Auto-load at login:
 
 ## Standard library image
 
-For most users, zscheme is one source file. Zion evaluates `.z.scheme` at
+For most users, zscheme is one source file. Operator evaluates `.z.scheme` at
 startup. The published default is the physical concatenation of four ordinary
 Scheme libraries, in this order:
 
@@ -215,7 +221,7 @@ source, use:
 make publish
 ```
 
-Set `.z.scheme` in Zion to the resulting immutable source CID, then publish
+Set `.z.scheme` in Operator to the resulting immutable source CID, then publish
 the selected script collection. Everything under `.z` is public code and must
 not contain passwords, keys, or other secrets:
 

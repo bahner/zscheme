@@ -19,7 +19,7 @@ Practical guide to scripting the 間 actor platform with zscheme.
 
 ## 1. First steps
 
-Open `zion` and type a `(…)` expression:
+Open `operator` and type a `(…)` expression:
 
 ```scheme
 (+ 2 3)               ; → 5
@@ -262,7 +262,7 @@ room occupants, such as agents and things, must send explicit `kind=agent` or
 Or share as a URL:
 
 ```
-https://zion.bahner.com/?ctx=@sky#room
+https://operator.bahner.com/?ctx=@sky#room
 ```
 
 ---
@@ -374,11 +374,11 @@ restored automatically.
 Any `?ctx=` parameter is applied automatically after login:
 
 ```
-https://zion.bahner.com/?ctx=@sky#room
+https://operator.bahner.com/?ctx=@sky#room
 ```
 
 Combine with `?say=` to pre-fill the input field:
 
 ```
-https://zion.bahner.com/?ctx=@sky#room&say=sky#room
+https://operator.bahner.com/?ctx=@sky#room&say=sky#room
 ```

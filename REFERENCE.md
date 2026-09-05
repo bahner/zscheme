@@ -3,7 +3,7 @@
 **Version:** 0.1.0  
 **Status:** Draft
 
-Complete reference for the zscheme language as implemented in `zion`.
+Complete reference for the zscheme language as implemented in `operator`.
 
 ---
 
@@ -23,7 +23,7 @@ Complete reference for the zscheme language as implemented in `zion`.
 
 ## 1. Syntax
 
-Any command line in `zion` containing `(` is pre-processed by the evaluator.
+Any command line in `operator` containing `(` is pre-processed by the evaluator.
 Each `(…)` span is evaluated as a Scheme expression; the result is substituted
 as a string at that position. The remaining text is dispatched normally.
 

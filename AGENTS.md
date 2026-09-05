@@ -34,11 +34,11 @@ strings, with repeated DIDs collapsed before it crosses the avatar boundary.
 ## Events and avatar layer
 
 Events do not belong to the runtime as an authoritative semantic surface. They
-are a client-side, Zion-facing convenience stream: a human terminal can consume
+are a client-side, Operator-facing convenience stream: a human terminal can consume
 room broadcasts / `:print`-style traffic as a narrative overlay, while the
 runtime answers ordinary message/data questions through `ma-reply!` and structured
 ctx maps. In other words, the event channel is consumer-visible machinery for
-Zion, not a second world protocol to be reified in the runtime library.
+Operator, not a second world protocol to be reified in the runtime library.
 
 The avatar layer is a client-side facade over the data forms. It resolves a
 human word against the room snapshot and inventory, chooses a single `did:`

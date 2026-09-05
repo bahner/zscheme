@@ -9,7 +9,7 @@ BOOTSTRAP_CID := $(BOOTSTRAP).cid
 # Publish the individual libraries, then their combined source.
 publish: $(LIBRARY_CIDS) fetch
 
-# Publish only the combined Zion startup source.
+# Publish only the combined Operator startup source.
 zscheme-cid: fetch
 
 fetch: $(BOOTSTRAP_CID)

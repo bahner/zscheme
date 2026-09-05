@@ -11,7 +11,7 @@
 ;; Publish to IPFS: .my.doc.stdlib!publish @ma
 ;; Then share the CID so others can: .my.doc.stdlib!fetch /ipfs/<cid>
 ;;
-;; Nothing in this file knows about DIDs, actors, Zion state, or the network.
+;; Nothing in this file knows about DIDs, actors, Operator state, or the network.
 ;; That is the boundary: if a helper is useful for ordinary Scheme data, it
 ;; belongs here; if it knows what an MA ctx means, it belongs in runtime.
 
