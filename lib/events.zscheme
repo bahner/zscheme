@@ -146,6 +146,15 @@
 (define (event-narrate text)
   (display text))
 
+; Direct speech/emote addressed to the avatar outside a room :event envelope.
+; These carry only the words (no ctx) — the pre-:event, pre-ctx form — so they
+; render verbatim rather than looking up a speaker name.
+(define (event-say-direct text)
+  (display text))
+
+(define (event-emote-direct text)
+  (display text))
+
 ; Personal completion events — clear pending entry, display failure if any.
 (define (event-action-done action-ctx)
   (let ((id (map-ref action-ctx "id" #f))
@@ -194,17 +203,21 @@
 ;; map entry. Membership events update cached children directly; topology
 ;; events replace the cache with a complete room snapshot.
 
+(define (dispatch-event handlers event args)
+  (let ((handler (map-ref handlers event #f)))
+    (if handler
+      (guard (e (#t (display (string-append "event " event ": " e)) ()))
+        (apply handler args))
+      ())))
+
+; Top-level unsolicited verbs addressed straight to the avatar: transport
+; handshakes, direct prints, direct speech/emote (no ctx), refusal notices, and
+; personal action completion. These are never room broadcasts.
 (define event-handlers
   (make-map ":print" event-print
-            ":arrive" event-arrive
-            ":leave" event-leave
-            ":child-ctx" event-child-ctx
+            ":say" event-say-direct
+            ":emote" event-emote-direct
             ":child" event-child
-            ":say" event-say
-            ":emote" event-emote
-            ":narrate" event-narrate
-            ":dig" event-dig
-            ":fill" event-fill
             ":parent" event-parent
             ":roll-call-child" event-roll-call-child
             ":hold" event-refuse-hold
@@ -213,12 +226,27 @@
             ":put-event" event-put
             ":take-event" event-take-done))
 
+; Room and exit world events arrive wrapped in a single :event envelope so a
+; room broadcast (:event :say <ctx> <text>) never collides with a direct term
+; (:say <text>). The room owns these event names; the same names outside the
+; envelope are either direct messages (handled above) or, for membership events
+; such as :arrive/:leave, not valid outside a room and therefore ignored.
+(define room-event-handlers
+  (make-map ":arrive" event-arrive
+            ":leave" event-leave
+            ":child-ctx" event-child-ctx
+            ":say" event-say
+            ":emote" event-emote
+            ":narrate" event-narrate
+            ":dig" event-dig
+            ":fill" event-fill))
+
 (define (on-event event args)
   ;; The host forwards every unsolicited verb; selecting and validating them is
   ;; this layer's job. Unknown events are ignored (the sender may be newer than
   ;; this client) and a malformed payload must not break the event loop.
-  (let ((handler (map-ref event-handlers event #f)))
-    (if handler
-      (guard (e (#t (display (string-append "event " event ": " e)) ()))
-        (apply handler args))
-      ())))
+  (if (equal? event ":event")
+      (let ((name (if (pair? args) (car args) #f))
+            (rest (if (pair? args) (cdr args) '())))
+        (dispatch-event room-event-handlers name rest))
+      (dispatch-event event-handlers event args)))

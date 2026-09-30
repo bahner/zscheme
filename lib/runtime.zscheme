@@ -52,10 +52,12 @@
 ;; identifier. Keeping this fallback in runtime gives every client the same
 ;; interpretation of a small ctx map.
 (define (event-name ctx)
-  (map-ref ctx "nick"
-    (map-ref ctx "name"
-      (map-ref ctx "did"
-        (map-ref ctx "actor" "(unknown)")))))
+  (if (map? ctx)
+      (map-ref ctx "nick"
+        (map-ref ctx "name"
+          (map-ref ctx "did"
+            (map-ref ctx "actor" "(unknown)"))))
+      "(unknown)"))
 
 (define (event-list-values values)
   ;; Runtime actors may publish keyed maps or ordered lists. Consumers resolve

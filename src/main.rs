@@ -25,7 +25,6 @@ use crate::scheme::init_session_env;
 use ma_zscheme_yaml::SchemeConfig;
 
 const ZSCHEME_SLUG: &str = "zscheme";
-const DEFAULT_GATEWAY_URL: &str = "https://dweb.link";
 const DID_REPUBLISH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // ── CLI ────────────────────────────────────────────────────────────────────
@@ -44,9 +43,10 @@ struct Cli {
     /// Both run against the backend daemon (auto-spawned if needed).
     script: Option<std::path::PathBuf>,
 
-    /// IPFS gateway URL (fallback when local Kubo is unavailable).
-    #[arg(long, default_value = DEFAULT_GATEWAY_URL, env = "ZSCHEME_GATEWAY")]
-    gateway: String,
+    /// Optional primary IPFS gateway URL. When omitted, the local gateway plus
+    /// ma-core's default public gateway (`ipfs.io`) are used.
+    #[arg(long, env = "ZSCHEME_GATEWAY")]
+    gateway: Option<String>,
 
     /// How often to drain the iroh inbox for actor-call replies (milliseconds).
     /// Lower values reduce latency for (@actor verb) and (actor-send …) calls.
@@ -145,7 +145,10 @@ async fn main() -> Result<()> {
 
     let mut secrets = load_secret_bundle(&core_config)?;
     let publication_secrets = is_daemon.then(|| secrets.clone());
-    let resolver = Arc::new(IpfsGatewayResolver::local_first(&cli.gateway));
+    let resolver = Arc::new(match &cli.gateway {
+        Some(url) => IpfsGatewayResolver::local_first(url),
+        None => IpfsGatewayResolver::default(),
+    });
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
     let mut endpoint = ma_core::new_ma_endpoint(
@@ -179,7 +182,7 @@ async fn main() -> Result<()> {
     let scheme_config = SchemeConfig::load(&data_path);
 
     // ── Build CliCtx ────────────────────────────────────────────────────────
-    // Local-first pool: localhost gateway, then --gateway, then public fallbacks.
+    // Local-first pool: localhost gateway, then optional `--gateway`, then public fallbacks.
     let signing_key_bytes = secrets.did_signing_key;
 
     let ctx = CliCtx::new(CliCtxInit {

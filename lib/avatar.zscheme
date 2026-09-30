@@ -196,11 +196,19 @@
 ; Every default-pool/room-pool-based resolver therefore retries once against a
 ; fresh room before reporting no-match.
 (define (resolve-one-entry-fresh word pool-thunk)
+  (resolve-one-entry-or-refresh word (pool-thunk) pool-thunk))
+
+; Resolve `word` against an already-built `pool`; on a miss, refresh the room
+; snapshot once and rebuild the pool via `rebuild` before giving up. Callers
+; with several references in one command (e.g. `put item in container`) build
+; the pool once and share it, so the inventory's `kind?`/`:contents?` round-
+; trips happen once instead of once per word.
+(define (resolve-one-entry-or-refresh word pool rebuild)
   (guard (e ((string-contains e "no match for")
              (remember-room! (room-call "look"))
-             (resolve-one-entry word (pool-thunk)))
+             (resolve-one-entry word (rebuild)))
             (#t (error e)))
-    (resolve-one-entry word (pool-thunk))))
+    (resolve-one-entry word pool)))
 
 (define (resolve-one word)
   (if (starts-with-did? word)
@@ -341,6 +349,22 @@
              (not (equal? name "(none)")))
       (make-map "actor" inventory "name" name)
       (make-map "actor" inventory "name" inventory))))
+
+; Re-announce the avatar's own room to the nodes it parents. The room is the
+; source of :here; a held item or equipped container stops receiving that
+; cascade, so its "here" goes stale. A chest equipped in one room and an item
+; picked up in another then fail the chest's same-room admission on put. The
+; avatar is the parent of both, so it re-syncs them before a put.
+(define (sync-carried-here!)
+  (let ((room (guard (e (#t #f)) (room))))
+    (when (and (string? room) (starts-with-did? room))
+      (when held-item
+        (guard (e (#t #f))
+          (actor-call (entry-actor held-item) "here" room)))
+      (let ((inv (my-inv-if-any)))
+        (when inv
+          (guard (e (#t #f))
+            (actor-call inv "here" room)))))))
 
       ;; ── World-building and movement verbs ──────────────────────────────────────
       ;;
@@ -640,8 +664,10 @@
             (let ((inventory (my-inv-if-any)))
               (if (not inventory)
                 (error "no inventory equipped")
-                (let ((id (actor-call target "put" inventory)))
-                  (when (string? id) (pending-store! id))))
+                (begin
+                  (sync-carried-here!)
+                  (let ((id (actor-call target "put" inventory)))
+                    (when (string? id) (pending-store! id)))))
               nil)))))))
 
 ; Unequip is keep's mirror image: the equipped inventory container leaves the
@@ -727,7 +753,9 @@
 
 ; Drop's search space: what you're holding, everything in the equipped
 ; inventory, and the contents of the containers inside that inventory — one
-; nesting level, enough to reach a bag packed inside the rucksack.
+; nesting level, enough to reach a bag packed inside the rucksack. Only
+; container entries are descended into: a thing has no :contents? verb, so
+; asking it would leave the call waiting for a reply that never arrives.
 (define (drop-pool)
   (let ((inventory (resolve-inventory-pool)))
     (if (null? inventory)
@@ -736,8 +764,10 @@
               (append inventory
                       (flatten-list
                         (map (lambda (entry)
-                               (guard (e (#t ()))
-                                 (container-contents (entry-actor entry))))
+                               (if (equal? (map-ref entry "kind" "") "container")
+                                   (guard (e (#t ()))
+                                     (container-contents (entry-actor entry)))
+                                   ()))
                              (cdr inventory))))))))
 
 ; The source container in `drop <item> from <container>` has the same
@@ -830,9 +860,12 @@
     (with-action-context
       (string-append "could not put " (join-words item-words) " in " (join-words container-words))
       (lambda ()
-        (let* ((item-entry (resolve-one-entry-fresh (join-words item-words) default-pool))
+        (let* ((pool (default-pool))
+               (item-entry (resolve-one-entry-or-refresh (join-words item-words) pool default-pool))
                (item (entry-actor item-entry))
-               (container (resolve-one (join-words container-words))))
+               (container (entry-actor
+                            (resolve-one-entry-or-refresh (join-words container-words) pool default-pool))))
+          (sync-carried-here!)
           (let ((id (actor-call item "put" container)))
             (when (string? id) (pending-store! id)))
           nil)))))

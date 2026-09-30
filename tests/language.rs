@@ -199,8 +199,8 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
                     (make-map "actor" "did:ma:world#room" "name" "Room"
                               "children" (make-map "did:ma:alice" alice)))
 
-                (on-event ":arrive" (list lamp))
-                (on-event ":arrive" (list (map-set lamp "nick" "Brass Lamp")))
+                (on-event ":event" (list ":arrive" lamp))
+                (on-event ":event" (list ":arrive" (map-set lamp "nick" "Brass Lamp")))
                 (assert (= (length (room-child-pool last-room)) 2))
                 (assert (equal?
                     (map-ref (find-entry-by-actor (room-child-pool last-room)
@@ -208,8 +208,8 @@ fn production_room_events_mutate_cached_children_and_snapshots_replace_them() {
                              "nick" "")
                     "Brass Lamp"))
 
-                (on-event ":leave" (list lamp))
-                (on-event ":leave" (list lamp))
+                (on-event ":event" (list ":leave" lamp))
+                (on-event ":event" (list ":leave" lamp))
                 (assert (equal? (map entry-actor (room-child-pool last-room))
                                 (list "did:ma:alice")))
 
@@ -247,7 +247,7 @@ fn production_child_ctx_events_update_one_key_and_child_acks_replace_snapshot() 
                                                    "did:ma:world#lamp" lamp)))
 
                 ; A single child-ctx update refreshes exactly that child's key.
-                (on-event ":child-ctx" (list (map-set lamp "nick" "Bag")))
+                (on-event ":event" (list ":child-ctx" (map-set lamp "nick" "Bag")))
                 (assert (= (length (room-child-pool last-room)) 2))
                 (assert (equal?
                     (map-ref (find-entry-by-actor (room-child-pool last-room)
@@ -300,8 +300,8 @@ fn production_speech_events_take_a_context_and_text() {
 
                 (define duckie
                     (make-map "actor" "did:ma:world#duckie" "name" "Duckie"))
-                (on-event ":say" (list duckie "quack"))
-                (on-event ":emote" (list duckie "dances"))
+                (on-event ":event" (list ":say" duckie "quack"))
+                (on-event ":event" (list ":emote" duckie "dances"))
                 "speech-events-ok"
         "#
     );
@@ -309,6 +309,30 @@ fn production_speech_events_take_a_context_and_text() {
     let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "speech-events-ok");
     assert_eq!(ctx.output.borrow().as_str(), "Duckie: quackDuckie dances");
+}
+
+#[test]
+fn production_direct_speech_renders_verbatim_without_ctx() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                ; A bare :say/:emote carries only the words (no ctx), so it renders
+                ; verbatim instead of crashing on a name lookup.
+                (on-event ":say" (list "quack"))
+                (on-event ":emote" (list "dances"))
+                "direct-speech-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "direct-speech-ok");
+    assert_eq!(ctx.output.borrow().as_str(), "quackdances");
 }
 
 fn eval_file(path: &Path) -> Result<SchemeVal, SchemeErr> {
@@ -1168,8 +1192,10 @@ fn production_avatar_keep_stows_held_item_in_inventory() {
                 (#.my.ctx.inv: "did:ma:world#box")
                 (set! calls ())
                 (smoke "keep" (lambda () (keep)))
-                (assert (equal? calls (list (list "did:ma:world#lamp" "put"
-                                                  (list "did:ma:world#box")))))
+                (assert (equal? calls
+                    (list (list "did:ma:world#lamp" "here" (list "did:ma:world#room"))
+                          (list "did:ma:world#box" "here" (list "did:ma:world#room"))
+                          (list "did:ma:world#lamp" "put" (list "did:ma:world#box")))))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
                 (assert (equal? (map-ref pending-actions "put-1" #f) #t))
                 ; the held slot clears only on the old-parent confirmation.
@@ -1189,8 +1215,10 @@ fn production_avatar_keep_stows_held_item_in_inventory() {
                                                       "name" "Crate")))
                 (set! calls ())
                 (smoke "keep crate" (lambda () (keep "Crate")))
-                (assert (equal? calls (list (list "did:ma:world#crate" "put"
-                                                  (list "did:ma:world#box")))))
+                (assert (equal? calls
+                    (list (list "did:ma:world#crate" "here" (list "did:ma:world#room"))
+                          (list "did:ma:world#box" "here" (list "did:ma:world#room"))
+                          (list "did:ma:world#crate" "put" (list "did:ma:world#box")))))
                 (assert (equal? (#.my.ctx.inv) "did:ma:world#box"))
 
                 ; keeping something you're not holding is refused.
