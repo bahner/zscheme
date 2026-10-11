@@ -55,6 +55,15 @@ The host delivers typed unsolicited events but must not sequence `:hold`,
 `on-event` in zscheme owns `:parent` handshakes and every
 container/duckie/object-transfer decision.
 
+Exit traversal is the `bless → key → enter` protocol, and it lives entirely in
+the lambda-ma actors plus the avatar's thin wrappers: `go <direction>` sends
+`:use` to the exit and, on a `{dst, secret}` reply, presents the secret at the
+destination's `:enter {secret}`; a locked exit is opened by presenting its lock
+secret with `unlock <direction> with <secret>` (which sends `:unlock` straight
+to the exit; a lock is global, never per-player). Exit narration uses the LambdaCore-named props (`leave_msg`,
+`oleave_msg`, `arrive_msg`, `oarrive_msg`, `nogo_msg`); a room's `free_entry`
+prop decides whether it admits a bare DID directly or requires a key.
+
 The host forwards **every** unsolicited actor term, not a curated subset, and no
 longer validates argument shapes. `on-event` is therefore the only filter:
 unknown verbs must be ignored silently, and a handler must not assume its
@@ -67,8 +76,9 @@ cached parent with the ordinary `:parent <ctx>`. The pinger's identity is
 irrelevant, and answering must have no parenting side effects. Roll-call is
 runtime policy — a client only ever answers one, never starts one.
 
-All object arguments use one room-child resolver over `who`, `agents`,
-`things`, and `exits`, followed by inventory contents. Exactly one match is
+All object arguments use one resolver over the room's children (`who`,
+`agents`, `things`) plus its `exits` map (local name → exit DID-URL, presented
+as `exit` entries), followed by inventory contents. Exactly one match is
 accepted; no match is an error, and multiple matches list their DID/DID-URLs so
 the user can rephrase or supply an exact address. An ambiguous candidate also
 shows `in inventory` when its ctx parent matches `.my.ctx.inv`, or `in <room

@@ -136,9 +136,8 @@ fn production_events_render_humans_and_agents_as_occupants() {
                               (list (make-map "actor" "did:ma:alice" "kind" "agent"
                                               "name" "Alice")
                                     (make-map "actor" "did:ma:world#attila" "kind" "agent"
-                                              "name" "Attila")
-                                    (make-map "actor" "did:ma:world#mirror" "kind" "exit"
-                                              "direction" "mirror"))))
+                                              "name" "Attila"))
+                              "exits" (make-map "mirror" "did:ma:world#mirror")))
                 "#
     );
 
@@ -522,17 +521,14 @@ fn production_avatar_resolves_exactly_one_exit_actor() {
                 {source}
 
                 (set! last-room
-                    (make-map "children"
-                        (list (make-map "actor" "did:ma:exit-hull" "kind" "exit"
-                                        "direction" "hull"))))
+                    (make-map "exits"
+                        (make-map "hull" "did:ma:exit-hull")))
                 (assert (equal? (resolve-exit "hull") "did:ma:exit-hull"))
 
                 (set! last-room
-                    (make-map "children"
-                        (list (make-map "actor" "did:ma:exit-one" "kind" "exit"
-                                        "direction" "east hatch")
-                              (make-map "actor" "did:ma:exit-two" "kind" "exit"
-                                        "direction" "east door"))))
+                    (make-map "exits"
+                        (make-map "east hatch" "did:ma:exit-one"
+                                  "east door" "did:ma:exit-two")))
                 (guard (error
                                 ((string-contains error "matches more than one") "avatar-exit-resolver-ok")
                                 (#t (error error)))
@@ -595,12 +591,12 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
                                        "parent" "did:ma:world#inventory" "name" "Silver Coin"))
                 (define hull-exit
                     (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
-                              "parent" "did:ma:world#room" "direction" "hull"))
+                              "name" "hull" "nick" "hull"))
                 (define room-snapshot
                     (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
                                         "nick" "tester" "name" "Test room" "description" "Ready."
-                                        "children" (make-map "did:ma:world#lamp" lamp
-                                                             "did:ma:world#exit-hull" hull-exit)))
+                                        "children" (make-map "did:ma:world#lamp" lamp)
+                                        "exits" (make-map "hull" "did:ma:world#exit-hull")))
                 (set! last-room room-snapshot)
 
                 (define actor-calls ())
@@ -867,12 +863,11 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
                               "parent" "did:ma:world#room" "name" "Box"))
                 (define mirror
                     (make-map "actor" "did:ma:world#mirror-exit" "kind" "exit"
-                              "parent" "did:ma:world#room" "name" "mirror"
-                              "direction" "mirror"))
+                              "name" "mirror" "nick" "mirror"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room"
-                              "children" (make-map "did:ma:world#box" box
-                                                   "did:ma:world#mirror-exit" mirror)))
+                              "children" (make-map "did:ma:world#box" box)
+                              "exits" (make-map "mirror" "did:ma:world#mirror-exit")))
                 (define calls ())
                 (define (smoke name thunk)
                     (guard (failure (#t (error (string-append name ": " failure))))
@@ -883,7 +878,7 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
                                 (equal? method "look"))
                            last-room)
                           ((and (equal? actor "did:ma:world#mirror-exit")
-                                (equal? method "traverse"))
+                                (equal? method "use"))
                            "blocked")
                           (else ())))
 
@@ -903,22 +898,25 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
                 (smoke "lock exit with secret"
                        (lambda () (lock "mirror" "with" "sesame")))
                 (assert (equal? calls
-                    (list (list "did:ma:world#room" "exit"
-                                (list "mirror" "lock" "sesame")))))
+                    (list (list "did:ma:world#mirror-exit" "lock" (list "sesame")))))
 
                 (set! calls ())
                 (smoke "unlock exit" (lambda () (unlock "mirror")))
                 (assert (equal? calls
-                    (list (list "did:ma:world#room" "exit"
-                                (list "mirror" "unlock")))))
+                    (list (list "did:ma:world#mirror-exit" "unlock" ()))))
 
                 (set! calls ())
-                (smoke "go with secret" (lambda () (go "mirror" "sesame")))
-                (assert (equal? calls
-                    (list (list "did:ma:world#mirror-exit" "traverse"
-                                (list (make-map "did" "did:ma:me"
-                                                "parent" "did:ma:world#room")
-                                      "sesame")))))
+                (smoke "go" (lambda () (go "mirror")))
+                (assert (equal? (car calls)
+                    (list "did:ma:world#mirror-exit" "use"
+                          (list (make-map "did" "did:ma:me"
+                                          "parent" "did:ma:world#room")))))
+
+                (set! calls ())
+                (smoke "unlock exit with secret"
+                       (lambda () (unlock "mirror" "with" "sesame")))
+                (assert (equal? (car calls)
+                    (list "did:ma:world#mirror-exit" "unlock" (list "sesame"))))
                 "lock-rpcs-ok"
         "#
     );
@@ -1782,11 +1780,10 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
 
                 (define hull
                     (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
-                              "parent" "did:ma:world#room" "direction" "hull"
-                              "name" "Hull"))
+                              "name" "Hull" "nick" "Hull"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "Room"
-                              "children" (make-map "did:ma:world#exit-hull" hull)))
+                              "exits" (make-map "hull" "did:ma:world#exit-hull")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
@@ -1795,9 +1792,9 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
                                 (equal? method "kind?"))
                            "/ma/container/0.0.1")
                           ((equal? method "contents?") ())
-                          ((equal? method "traverse")
-                           (make-map "parent" "did:ma:world#elsewhere"
-                                     "text" "You go hull."))
+                          ((equal? method "use")
+                           (make-map "dst" "did:ma:world#elsewhere"
+                                     "secret" "ticket-1"))
                           ((equal? method "enter")
                            (make-map "parent" "did:ma:world#elsewhere"
                                      "nick" "tester"))
@@ -1805,14 +1802,17 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
 
                 (go "hull")
 
-                ; First hop: ask the exit to traverse with our own did and parent.
+                ; First hop: ask the exit to use our own did and parent.
                 (assert (equal? (car calls)
-                    (list "did:ma:world#exit-hull" "traverse"
+                    (list "did:ma:world#exit-hull" "use"
                           (list (make-map "did" "did:ma:me"
                                           "parent" "did:ma:world#room")))))
-                ; Second hop: enter the room the exit returned.
-                (assert (equal? (cadr calls)
-                    (list "did:ma:world#elsewhere" "enter" (list "tester"))))
+                ; The bless returned dst + a one-time secret; we enter with it.
+                (assert (equal? (car (cdr calls))
+                    (list "did:ma:world#elsewhere" "enter"
+                          (list (make-map "secret" "ticket-1"
+                                          "name" "did:ma:me"
+                                          "nick" "tester")))))
                 ; The room address was updated from the entry reply.
                 (assert (equal? (#.my.ctx.room) "did:ma:world#elsewhere"))
                 "avatar-go-ok"
@@ -1840,30 +1840,25 @@ fn production_avatar_go_blocked_exit_does_not_reenter() {
 
                 (define mirror
                     (make-map "actor" "did:ma:world#exit-mirror" "kind" "exit"
-                              "parent" "did:ma:world#room" "direction" "mirror"
-                              "name" "Mirror"))
+                              "name" "Mirror" "nick" "Mirror"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "Room"
-                              "children" (make-map "did:ma:world#exit-mirror" mirror)))
+                              "exits" (make-map "mirror" "did:ma:world#exit-mirror")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
                     (set! calls (append calls (list (list actor method args))))
-                    (if (equal? method "traverse")
-                      ; A locked exit echoes the source room back as parent
-                      ; and narrates the refusal itself as a :say event.
-                      (make-map "did" "did:ma:me"
-                                "parent" "did:ma:world#room"
-                                "text" "The way is locked.")
+                    (if (equal? method "use")
+                      ; A locked exit refuses at once and narrates nogo_msg.
+                      (make-map "text" "The way is locked.")
                       ()))
 
                 (go "mirror")
 
-                ; The exit was asked exactly once; no pointless re-entry into
-                ; the same room, and go itself prints nothing (the exit's
-                ; :say event is the narration).
+                ; The exit was asked exactly once; a refusal never re-enters a
+                ; room. The refusal text is what go prints.
                 (assert (equal? calls
-                    (list (list "did:ma:world#exit-mirror" "traverse"
+                    (list (list "did:ma:world#exit-mirror" "use"
                                 (list (make-map "did" "did:ma:me"
                                                 "parent" "did:ma:world#room"))))))
                 "avatar-go-blocked-ok"
@@ -1872,7 +1867,7 @@ fn production_avatar_go_blocked_exit_does_not_reenter() {
 
     let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "avatar-go-blocked-ok");
-    assert_eq!(ctx.output.borrow().as_str(), "");
+    assert_eq!(ctx.output.borrow().as_str(), "The way is locked.");
 }
 
 #[test]
@@ -2118,9 +2113,6 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                 (define lamp
                     (make-map "actor" "did:ma:world#lamp" "kind" "thing" "name" "Lamp"
                                         "description" "A lamp."))
-                (define mirror
-                    (make-map "actor" "did:ma:world#mirror" "kind" "exit" "name" "Mirror"
-                                        "direction" "mirror" "description" "An exit."))
                 (define inventory-coin
                     (make-map "actor" "did:ma:world#coin" "kind" "thing" "name" "Coin"
                                         "description" "An inventory coin."))
@@ -2139,8 +2131,8 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                                         "children" (make-map "did:ma:attila" direct-attila
                                                              "did:ma:world#attila" agent-attila
                                                              "did:ma:world#lamp" lamp
-                                                             "did:ma:world#room-duckie" room-duckie
-                                                             "did:ma:world#mirror" mirror)))
+                                                             "did:ma:world#room-duckie" room-duckie)
+                                        "exits" (make-map "mirror" "did:ma:world#mirror")))
                 (#.my.ctx.inv: "did:ma:world#inventory")
 
                 (define (actor-call actor method . params)
@@ -2181,8 +2173,8 @@ fn production_avatar_resolves_room_and_inventory_children_or_reports_ambiguity()
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "The Construct"
                                         "children" (make-map "did:ma:attila" direct-attila
-                                                             "did:ma:world#lamp" lamp
-                                                             "did:ma:world#mirror" mirror)))
+                                                             "did:ma:world#lamp" lamp)
+                                        "exits" (make-map "mirror" "did:ma:world#mirror")))
                 (look "Coin")
                 "room-child-resolver-ok"
                 "#

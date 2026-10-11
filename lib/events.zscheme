@@ -30,7 +30,7 @@
 
 (define (event-exit-name exit)
   (if (map? exit)
-    (map-ref exit "direction" (event-name exit))
+    (map-ref exit "name" (event-name exit))
     exit))
 
 (define (event-who-name entry)
@@ -113,11 +113,15 @@
 
 (define (event-arrive ctx)
   (room-child-upsert! ctx)
-  (display (string-append (event-name ctx) " arrives.")))
+  (display (if (map? ctx)
+               (map-ref ctx "narrate" (string-append (event-name ctx) " arrives."))
+               (string-append (event-name ctx) " arrives."))))
 
 (define (event-leave ctx)
   (room-child-remove! ctx)
-  (display (string-append (event-name ctx) " leaves.")))
+  (display (if (map? ctx)
+               (map-ref ctx "narrate" (string-append (event-name ctx) " leaves."))
+               (string-append (event-name ctx) " leaves."))))
 
 ; A room parent announces a single child-ctx update: refresh exactly that
 ; child's key in the cached snapshot, without a full room refresh. Silent —

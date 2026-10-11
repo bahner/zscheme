@@ -112,7 +112,20 @@
             (member? (map-ref entry "kind" "") (list "thing" "container")))
           (room-child-pool room)))
 
-(define (exit-pool room) (room-child-kind-pool room "exit"))
+; Exits are not room children. The room publishes a plain `exits` map of
+; local name -> exit DID-URL, and that local name is the only word a player
+; uses to walk through. Build resolver entries from that map.
+(define (room-exits room)
+  (if (map? room) (map-ref room "exits" (make-map)) (make-map)))
+
+(define (exit-pool room)
+  (map (lambda (name)
+         (make-map "actor" (map-ref (room-exits room) name)
+                   "kind" "exit"
+                   "protocol" "/ma/exit/0.0.1"
+                   "name" name
+                   "nick" name))
+       (map-keys (room-exits room))))
 
 ; The trigger kind appears only in look's "Triggers:" presentation, never in
 ; who?/occupants?/things?/exits? — those pools are kind-filtered.
@@ -147,7 +160,7 @@
 (define (resolve-room-pool)
   (let* ((room1 (if (map? last-room) last-room (remember-room! (room-call "look"))))
          (pool1 (if (map? room1) (room-child-pool room1) ())))
-    pool1))
+    (append pool1 (if (map? room1) (exit-pool room1) ()))))
 
 ; The inventory container itself is a resolvable candidate beside its contents,
 ; so `equip chest from vadsæk` / `take coin from vadsæk` work when the source
@@ -245,9 +258,9 @@
 (define (resolve-in-given-pool word pool)
   (entry-actor (resolve-one-entry word pool)))
 
-; Exits match on their direction word first ("north"), falling back to any
-; nick/name they might also carry.
-(define (resolve-exit word) (resolve-against exit-pool word (list "direction" "nick" "name")))
+; Exits match on their local name, which is the only word a player uses to
+; walk through; `go` resolves it here and sends `:use` straight to the exit.
+(define (resolve-exit word) (resolve-against exit-pool word (list "nick" "name")))
 
 ; A container's own contents aren't in any room snapshot — the container has
 ; to be asked directly, exactly like resolving anything else that isn't here.
@@ -371,32 +384,38 @@
       ;; Everything below is intentionally thin. Resolve locally, make one ordinary
       ;; actor call, and let the authoritative actor return data or an error.
 
-; Movement is a two-hop relay (ma-spec sec 4), not one message: the exit
-; itself decides where "through" leads (and may refuse — a locked door just
-; echoes the *same* room back as `parent` along with blocking text), then a
-; *second*, separate `:enter` against the returned room is what actually
-; completes the move. There is no single "move me" verb anywhere in the spec.
-; The exit's `:traverse` takes a transient ctx map `{did, parent}` — the
-; traveller's own bare DID and its current room — never a bare DID string.
-; A locked exit admits a traveller who supplies the stored lock secret:
-; `go <direction> <secret>` passes it along as the second traverse argument.
-(define (go direction . secret-words)
-  (let* ((exit (resolve-exit direction))
-         (ctx (make-map "did" (#.my.identity.did) "parent" (room)))
-         (result (if (null? secret-words)
-                     (actor-call exit "traverse" ctx)
-                     (actor-call exit "traverse" ctx (join-words secret-words)))))
-    (if (map? result)
-      (let ((parent (map-ref result "parent" #f)))
-        ; A locked exit (or one that leads nowhere) echoes the source room
-        ; back as `parent` and narrates the refusal itself as a :say event —
-        ; only a *different* parent room completes the move, so a same-room
-        ; reply is neither re-entered nor re-printed here.
-        (if (and parent (not (equal? parent (room))))
-          (enter parent (#.my.ctx.nick))
-          #f))
-      (display result)))
+; Movement authorises through the exit, which blesses the destination room
+; and waits for it to decide. The destination answers with a one-time secret
+; (or a refusal); we then present that secret at the destination's `:enter`.
+; The exit drives narration on both ends, so no extra hop is needed here.
+(define (traversal-reply! reply)
+  (if (map? reply)
+    (let ((dst (map-ref reply "dst" #f))
+          (secret (map-ref reply "secret" #f))
+          (text (map-ref reply "text" #f)))
+      (cond ((and (string? dst) (starts-with-did? dst)
+                  (string? secret) (not (equal? dst (room))))
+             (enter-with-secret dst secret))
+            ((string? text) (display text))
+            (else (display reply))))
+    (display reply))
   nil)
+
+; Complete a blessed move: the destination issued a one-time secret which we
+; present at `:enter`. The destination narrates arrival; the exit already told
+; the source room to narrate departure, so no `:leave` is sent here.
+(define (enter-with-secret target secret)
+  (let ((ctx (make-map "secret" secret
+                       "name" (local-string (lambda () (#.my.profile.name)) (#.my.identity.did))
+                       "nick" (local-string (lambda () (#.my.ctx.nick)) (#.my.identity.did)))))
+    (let ((result (apply-entry-ctx! (actor-call target "enter" ctx))))
+      (if (map? result) (look) (display result))))
+  nil)
+
+(define (go direction)
+  (let* ((exit (resolve-exit direction))
+         (ctx (make-map "did" (#.my.identity.did) "parent" (room))))
+    (traversal-reply! (actor-call exit "use" ctx))))
 (define (dig . args)
   (apply room-call "dig" args))
 
@@ -1094,27 +1113,21 @@
   (display (command name "owner?"))
   nil)
 
-;; ── Locking ─────────────────────────────────────────────────────────────────
-; lock/unlock are owner-gated at the actor, and `:lock <secret>` is the same
-; contract for containers and exits: the owner (or, for an exit, the room that
-; owns it) locks with an optional secret that lets a non-owner `unlock` — or,
-; for an exit, pass straight through with `go <direction> <secret>`. Exits
-; accept lock commands only from their source room, so the command routes
-; through the room's owner-gated `:exit <direction> <verb>` proxy using the
-; exit's direction; everything else is addressed directly.
+;; ── Locking ────────────────────────────────────────────────────────
+; lock/unlock address the target directly: the exit (or container) itself gates
+; the operation. A lock is global — locked is locked for everyone — so
+; `unlock <exit> with <secret>` lets a traveller holding the lock secret open
+; it, while the owner locks and unlocks directly.
 (define lock-usage "usage: lock <target...> [with <secret>]")
 (define unlock-usage "usage: unlock <target...> [with <secret>]")
 
 (define (lock-rpc! words usage verb)
   (let* ((s (split-command! words "with" usage #f))
-         (target-words (car s))
+         (target (join-words (car s)))
          (secret-words (cadr s))
-         (target (join-words target-words))
-         (entry (resolve-one-entry-fresh target default-pool))
-         (args (if secret-words (list (join-words secret-words)) ())))
-    (if (equal? (map-ref entry "kind" "") "exit")
-      (apply room-call "exit" (cons (map-ref entry "direction" "") (cons verb args)))
-      (display (apply actor-call (entry-actor entry) verb args)))
+         (args (if secret-words (list (join-words secret-words)) ()))
+         (entry (resolve-one-entry-fresh target default-pool)))
+    (display (apply actor-call (entry-actor entry) verb args))
     nil))
 
 (define (lock . words) (lock-rpc! words lock-usage "lock"))
@@ -1238,7 +1251,7 @@
     (display (command (join-words rest) "help"))
     (display
       (string-append
-        "go <direction> [secret]  move through a named exit (secret unlocks a locked one)\n"
+        "go <direction>          move through a named exit\n"
         "help                    show this command list\n"
         "help <name>             show usage for something here or in your inventory\n"
         "look                    show the current room\n"
@@ -1309,9 +1322,11 @@
                        word)))
                (resolve-one-entry-fresh word default-pool))))
       (if entry
-        (if (equal? (map-ref entry "kind" "") "container")
-          (display (actor-call (entry-actor entry) "look"))
-          (look-entry entry))
+        (cond ((equal? (map-ref entry "kind" "") "container")
+               (display (actor-call (entry-actor entry) "look")))
+              ((equal? (map-ref entry "kind" "") "exit")
+               (display (actor-call (entry-actor entry) "look")))
+              (else (look-entry entry)))
         (error (string-append word " is not here."))))
     (let ((snapshot (remember-room! (room-call "look"))))
       (if (map? snapshot)
