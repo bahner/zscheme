@@ -121,8 +121,8 @@
 (define (exit-pool room)
   (map (lambda (name)
          (make-map "actor" (map-ref (room-exits room) name)
-                   "kind" "exit"
-                   "protocol" "/ma/exit/0.0.1"
+                   "kind" "passage"
+                   "protocol" "/ma/passage/0.0.1"
                    "name" name
                    "nick" name))
        (map-keys (room-exits room))))
@@ -259,7 +259,7 @@
   (entry-actor (resolve-one-entry word pool)))
 
 ; Exits match on their local name, which is the only word a player uses to
-; walk through; `go` resolves it here and sends `:use` straight to the exit.
+; walk through; `go` sends one `:move` ctx to the current room.
 (define (resolve-exit word) (resolve-against exit-pool word (list "nick" "name")))
 
 ; A container's own contents aren't in any room snapshot — the container has
@@ -384,38 +384,29 @@
       ;; Everything below is intentionally thin. Resolve locally, make one ordinary
       ;; actor call, and let the authoritative actor return data or an error.
 
-; Movement authorises through the exit, which blesses the destination room
-; and waits for it to decide. The destination answers with a one-time secret
-; (or a refusal); we then present that secret at the destination's `:enter`.
-; The exit drives narration on both ends, so no extra hop is needed here.
-(define (traversal-reply! reply)
-  (if (map? reply)
-    (let ((dst (map-ref reply "dst" #f))
-          (secret (map-ref reply "secret" #f))
-          (text (map-ref reply "text" #f)))
-      (cond ((and (string? dst) (starts-with-did? dst)
-                  (string? secret) (not (equal? dst (room))))
-             (enter-with-secret dst secret))
-            ((string? text) (display text))
-            (else (display reply))))
-    (display reply))
+; A walk is one move ctx sent to the current room. The passage routes it and
+; the answer arrives later as a `:move` event: either `deny`, or the established
+; `exit` room plus the `key` to present there. `event-move` completes it.
+(define (new-traverse-id)
+  (number->string (random 9223372036854775807)))
+
+(define (go direction)
+  (room-call "move"
+             (make-map "traverseId" (new-traverse-id) "direction" direction))
   nil)
 
-; Complete a blessed move: the destination issued a one-time secret which we
-; present at `:enter`. The destination narrates arrival; the exit already told
-; the source room to narrate departure, so no `:leave` is sent here.
-(define (enter-with-secret target secret)
-  (let ((ctx (make-map "secret" secret
+; Complete a routed move: present the key at the destination the passage
+; established. The destination commits presence and narrates arrival; the
+; source room already narrated the departure when it handed us the move ctx.
+(define (enter-with-key target tid key)
+  (let ((ctx (make-map "did" (#.my.identity.did)
+                       "traverseId" tid
+                       "key" key
                        "name" (local-string (lambda () (#.my.profile.name)) (#.my.identity.did))
                        "nick" (local-string (lambda () (#.my.ctx.nick)) (#.my.identity.did)))))
     (let ((result (apply-entry-ctx! (actor-call target "enter" ctx))))
       (if (map? result) (look) (display result))))
   nil)
-
-(define (go direction)
-  (let* ((exit (resolve-exit direction))
-         (ctx (make-map "did" (#.my.identity.did) "parent" (room))))
-    (traversal-reply! (actor-call exit "use" ctx))))
 (define (dig . args)
   (apply room-call "dig" args))
 

@@ -55,14 +55,19 @@ The host delivers typed unsolicited events but must not sequence `:hold`,
 `on-event` in zscheme owns `:parent` handshakes and every
 container/duckie/object-transfer decision.
 
-Exit traversal is the `bless → key → enter` protocol, and it lives entirely in
-the lambda-ma actors plus the avatar's thin wrappers: `go <direction>` sends
-`:use` to the exit and, on a `{dst, secret}` reply, presents the secret at the
-destination's `:enter {secret}`; a locked exit is opened by presenting its lock
-secret with `unlock <direction> with <secret>` (which sends `:unlock` straight
-to the exit; a lock is global, never per-player). Exit narration uses the LambdaCore-named props (`leave_msg`,
-`oleave_msg`, `arrive_msg`, `oarrive_msg`, `nogo_msg`); a room's `free_entry`
-prop decides whether it admits a bare DID directly or requires a key.
+Exit traversal is `:move` all the way and lives in the lambda-ma actors plus
+the avatar's thin wrappers. `go <direction>` mints a `traverseId` and sends one
+`:move` ctx to the current room; the room hands it to the passage, the passage
+routes it and relays the destination's answer back, and the room removes the
+traveller and forwards the move ctx. The answer arrives as a `:move` event
+carrying either `deny` or the established `exit` room plus `key`; `event-move`
+then sends `:enter { did, traverseId, name, nick, key }` to that room. A locked
+passage answers `deny`; it is opened by presenting its lock secret with
+`unlock <direction> with <secret>` (which sends `:unlock` straight to the
+passage; a lock is global, never per-player). Narration uses the LambdaCore
+props (`leave_msg`, `oleave_msg`, `arrive_msg`, `oarrive_msg`, `nogo_msg`,
+`onogo_msg`); a room's `public` prop decides whether it admits directly or
+requires a key.
 
 The host forwards **every** unsolicited actor term, not a curated subset, and no
 longer validates argument shapes. `on-event` is therefore the only filter:
@@ -123,6 +128,6 @@ Inside Scheme parentheses, programs use hash-dot local paths exclusively: `#.my.
 - `ipfs-name-resolve` uses `SchemeCtx::resolve_ipns` and returns an `/ipfs/<cid>` reference without loading content.
 - `include` is the only one of these operations that evaluates fetched Scheme source.
 - Preserve `SchemeVal::Bytes` as CBOR byte strings and string-keyed maps as CBOR maps in message traffic.
-- Delegate IPNS gateway selection and resolution metadata parsing to the shared `ma_core::IpfsGatewayResolver`; do not duplicate it in `CliCtx`.
+- Delegate DID/IPNS resolution to `ma_core::KuboDidResolver` and content reads to `ma_core::cat_bytes`; do not duplicate Kubo RPC handling in `CliCtx`.
 
 For unreleased cross-repository APIs, validate with temporary Cargo `--config patch.crates-io.<crate>.path=...` overrides and leave `Cargo.toml` and `Cargo.lock` on registry sources.

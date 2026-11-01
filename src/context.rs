@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::{channel::oneshot, future::LocalBoxFuture};
-use ma_core::{Did, IpfsGatewayResolver, Message, SigningKey, INBOX_PROTOCOL_ID};
+use ma_core::{Did, IpnsPathResolver, KuboDidResolver, Message, SigningKey, INBOX_PROTOCOL_ID};
 use ma_zscheme::{
     parse_actor_command, parse_dot_command, DotOp, DotRegistry, SchemeCtx, SchemeErr, SchemeVal,
 };
@@ -27,17 +27,13 @@ pub struct CliCtx {
     pub signing_key_bytes: [u8; 32],
     /// iroh endpoint for sending/receiving messages.
     pub endpoint: tokio::sync::Mutex<Box<dyn ma_core::MaEndpoint>>,
-    /// DID resolver for looking up actor endpoints.
-    pub resolver: Arc<IpfsGatewayResolver>,
+    /// Kubo-backed DID/IPNS resolver for actor endpoints and name lookups.
+    pub resolver: Arc<KuboDidResolver>,
     /// Pending reply senders keyed by message id.
     pub reply_senders: RefCell<HashMap<String, oneshot::Sender<Result<SchemeVal, String>>>>,
 
     /// Inbox for receiving replies.
     pub inbox: RefCell<ma_core::Inbox<Message>>,
-    /// Kubo RPC base URL (e.g. `http://127.0.0.1:5001`).
-    pub kubo_rpc_url: String,
-    /// reqwest client (reused for local Kubo cat calls).
-    pub http: reqwest::Client,
     /// Optional display redirect. When set (daemon mode), `(display …)`
     /// output is routed here instead of stdout.
     pub display_sink: RefCell<Option<DisplaySink>>,
@@ -53,12 +49,10 @@ pub struct CliCtxInit {
     pub signing_key_bytes: [u8; 32],
     /// iroh endpoint for transport.
     pub endpoint: Box<dyn ma_core::MaEndpoint>,
-    /// DID resolver for target lookup.
-    pub resolver: Arc<IpfsGatewayResolver>,
+    /// Kubo-backed DID/IPNS resolver for target lookup.
+    pub resolver: Arc<KuboDidResolver>,
     /// Inbox for receiving replies.
     pub inbox: ma_core::Inbox<Message>,
-    /// Kubo RPC base URL.
-    pub kubo_rpc_url: String,
 }
 
 /// Re-export the ma-zscheme Ctx type (Rc<dyn SchemeCtx>) for use in main.rs,
@@ -79,8 +73,6 @@ impl CliCtx {
             resolver: init.resolver,
             reply_senders: RefCell::new(HashMap::new()),
             inbox: RefCell::new(init.inbox),
-            kubo_rpc_url: init.kubo_rpc_url,
-            http: reqwest::Client::new(),
             display_sink: RefCell::new(None),
         })
     }
@@ -89,12 +81,6 @@ impl CliCtx {
 // ── Non-trait methods ──────────────────────────────────────────────────────
 
 impl CliCtx {
-    /// Config read helper.
-    #[allow(dead_code)]
-    pub fn config_get(&self, path: &str) -> Option<String> {
-        self.config.borrow().get(path)
-    }
-
     /// Close the iroh endpoint gracefully.
     pub async fn close(&self) {
         self.endpoint.lock().await.close().await;
@@ -240,37 +226,23 @@ impl SchemeCtx for CliCtx {
     // ── Async ─────────────────────────────────────────────────────────────
 
     fn fetch_path<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<String, String>> {
-        let http = self.http.clone();
-        let resolver = self.resolver.clone();
-        let kubo_rpc_url = self.kubo_rpc_url.clone();
+        let kubo_rpc_url = self.resolver.kubo_url().to_string();
         let path = path.to_string();
         Box::pin(async move {
-            if let Some(resp) = try_kubo_cat(&http, &kubo_rpc_url, &path).await {
-                return resp.text().await.map_err(|e| e.to_string());
-            }
-            resolver
-                .pool()
-                .fetch(&path, None, |body| {
-                    String::from_utf8(body.to_vec()).map_err(|e| e.to_string())
-                })
+            let bytes = ma_core::cat_bytes(&kubo_rpc_url, &path)
                 .await
+                .map_err(|error| error.to_string())?;
+            String::from_utf8(bytes).map_err(|error| error.to_string())
         })
     }
 
     fn fetch_bytes<'a>(&'a self, path: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>, String>> {
-        let http = self.http.clone();
-        let resolver = self.resolver.clone();
-        let kubo_rpc_url = self.kubo_rpc_url.clone();
+        let kubo_rpc_url = self.resolver.kubo_url().to_string();
         let path = path.to_string();
         Box::pin(async move {
-            if let Some(resp) = try_kubo_cat(&http, &kubo_rpc_url, &path).await {
-                return resp
-                    .bytes()
-                    .await
-                    .map(|b| b.to_vec())
-                    .map_err(|e| e.to_string());
-            }
-            resolver.pool().fetch_bytes(&path, None).await
+            ma_core::cat_bytes(&kubo_rpc_url, &path)
+                .await
+                .map_err(|error| error.to_string())
         })
     }
 
@@ -416,24 +388,6 @@ impl SchemeCtx for CliCtx {
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────
-
-/// Try fetching `path` from the local Kubo daemon; returns the response on
-/// success so the caller can deserialise it as text or bytes.
-async fn try_kubo_cat(
-    http: &reqwest::Client,
-    kubo_rpc_url: &str,
-    path: &str,
-) -> Option<reqwest::Response> {
-    let url = format!(
-        "{}/api/v0/cat?arg={}",
-        kubo_rpc_url.trim_end_matches('/'),
-        path
-    );
-    match http.post(&url).send().await {
-        Ok(resp) if resp.status().is_success() => Some(resp),
-        _ => None,
-    }
-}
 
 /// Ensure the actor string has a leading `@` or `did:` prefix.
 fn normalize_actor_str(input: &str) -> String {

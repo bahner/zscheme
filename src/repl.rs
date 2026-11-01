@@ -1,4 +1,5 @@
 /// Interactive REPL for zscheme — readline-backed with persistent history.
+use futures::future::LocalBoxFuture;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -12,21 +13,32 @@ const PROMPT_CONT: &str = "    ... ";
 ///
 /// `Ok(None)` means the result was nil (print nothing); `Ok(Some(s))` is a
 /// display string for stdout; `Err(s)` is a pre-formatted error for stderr.
-#[allow(async_fn_in_trait)] // single-threaded LocalSet usage — no Send bound wanted
+///
+/// Evaluations run on a single-threaded `LocalSet` and borrow `Rc`-based
+/// context, so the future is deliberately `!Send` and spelled as a
+/// `LocalBoxFuture` rather than an `async fn` in the trait.
 pub trait ReplEval {
-    async fn eval(&mut self, source: &str) -> Result<Option<String>, String>;
+    fn eval<'a>(
+        &'a mut self,
+        source: &'a str,
+    ) -> LocalBoxFuture<'a, Result<Option<String>, String>>;
 }
 
 /// In-process evaluator (standalone mode).
 pub struct LocalEval(pub Ctx);
 
 impl ReplEval for LocalEval {
-    async fn eval(&mut self, source: &str) -> Result<Option<String>, String> {
-        match eval_line(source, self.0.clone()).await {
-            Ok(SchemeVal::Nil) => Ok(None),
-            Ok(val) => Ok(Some(val.display())),
-            Err(e) => Err(crate::daemon::format_scheme_err(&e)),
-        }
+    fn eval<'a>(
+        &'a mut self,
+        source: &'a str,
+    ) -> LocalBoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async move {
+            match eval_line(source, self.0.clone()).await {
+                Ok(SchemeVal::Nil) => Ok(None),
+                Ok(val) => Ok(Some(val.display())),
+                Err(e) => Err(crate::daemon::format_scheme_err(&e)),
+            }
+        })
     }
 }
 

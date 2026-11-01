@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ma_core::config::{Config, MaArgs, SecretBundle};
 use ma_core::ipfs::{DidDocumentPublishOptions, IpfsDidPublisher, RemotePinOptions};
-use ma_core::{IpfsGatewayResolver, MaExtension, INBOX_PROTOCOL_ID};
+use ma_core::{KuboDidResolver, MaExtension, INBOX_PROTOCOL_ID};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 use tokio::task::spawn_local;
 use tracing::{info, warn};
@@ -42,11 +42,6 @@ struct Cli {
     /// Script file to execute. If omitted, starts the interactive REPL.
     /// Both run against the backend daemon (auto-spawned if needed).
     script: Option<std::path::PathBuf>,
-
-    /// Optional primary IPFS gateway URL. When omitted, the local gateway plus
-    /// ma-core's default public gateway (`ipfs.io`) are used.
-    #[arg(long, env = "ZSCHEME_GATEWAY")]
-    gateway: Option<String>,
 
     /// How often to drain the iroh inbox for actor-call replies (milliseconds).
     /// Lower values reduce latency for (@actor verb) and (actor-send …) calls.
@@ -145,10 +140,7 @@ async fn main() -> Result<()> {
 
     let mut secrets = load_secret_bundle(&core_config)?;
     let publication_secrets = is_daemon.then(|| secrets.clone());
-    let resolver = Arc::new(match &cli.gateway {
-        Some(url) => IpfsGatewayResolver::local_first(url),
-        None => IpfsGatewayResolver::default(),
-    });
+    let resolver = Arc::new(KuboDidResolver::new(core_config.kubo_rpc_url.clone()));
 
     // ── iroh endpoint ───────────────────────────────────────────────────────
     let mut endpoint = ma_core::new_ma_endpoint(
@@ -182,7 +174,7 @@ async fn main() -> Result<()> {
     let scheme_config = SchemeConfig::load(&data_path);
 
     // ── Build CliCtx ────────────────────────────────────────────────────────
-    // Local-first pool: localhost gateway, then optional `--gateway`, then public fallbacks.
+    // All IPFS reads go through the local Kubo RPC endpoint.
     let signing_key_bytes = secrets.did_signing_key;
 
     let ctx = CliCtx::new(CliCtxInit {
@@ -192,7 +184,6 @@ async fn main() -> Result<()> {
         endpoint,
         resolver,
         inbox,
-        kubo_rpc_url: core_config.kubo_rpc_url.clone(),
     });
 
     // Zeroize signing key copy from secrets after it has been stored in ctx.

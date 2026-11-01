@@ -234,15 +234,15 @@ async fn handle_conn(
                 source,
                 isolated,
             } => {
-                let outcome = eval_request(
-                    &ctx,
-                    &eval_lock,
-                    &tx,
+                let outcome = eval_request(EvalJob {
+                    ctx: &ctx,
+                    eval_lock: &eval_lock,
+                    tx: &tx,
                     id,
-                    &source,
+                    source: &source,
                     isolated,
-                    &mut isolated_env,
-                )
+                    isolated_env: &mut isolated_env,
+                })
                 .await;
                 let _ = tx.send(Response::EvalResult { id, outcome });
             }
@@ -254,16 +254,29 @@ async fn handle_conn(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn eval_request(
-    ctx: &Rc<CliCtx>,
-    eval_lock: &tokio::sync::Mutex<()>,
-    tx: &UnboundedSender<Response>,
+/// One client's evaluation request, bundled so the evaluator entry point does
+/// not grow an argument list per new piece of request state.
+struct EvalJob<'a> {
+    ctx: &'a Rc<CliCtx>,
+    eval_lock: &'a tokio::sync::Mutex<()>,
+    tx: &'a UnboundedSender<Response>,
     id: u64,
-    source: &str,
+    source: &'a str,
     isolated: bool,
-    isolated_env: &mut Option<ma_zscheme::Env>,
-) -> Result<Option<String>, String> {
+    isolated_env: &'a mut Option<ma_zscheme::Env>,
+}
+
+async fn eval_request(job: EvalJob<'_>) -> Result<Option<String>, String> {
+    let EvalJob {
+        ctx,
+        eval_lock,
+        tx,
+        id,
+        source,
+        isolated,
+        isolated_env,
+    } = job;
+
     // Serialize evaluations across all connections.
     let _guard = eval_lock.lock().await;
 

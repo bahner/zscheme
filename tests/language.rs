@@ -13,6 +13,9 @@ use ma_zscheme::{
 struct TestCtx {
     config: RefCell<InMemoryRegistry>,
     output: RefCell<String>,
+    /// Requested byte counts, in call order. Tests assert on this to prove a
+    /// host operation actually asked the CSPRNG seam for entropy.
+    random_requests: RefCell<Vec<usize>>,
 }
 
 impl SchemeCtx for TestCtx {
@@ -60,6 +63,19 @@ impl SchemeCtx for TestCtx {
 
     fn display_output(&self, text: &str) {
         self.output.borrow_mut().push_str(text);
+    }
+
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, String> {
+        let mut requests = self.random_requests.borrow_mut();
+        requests.push(len);
+        // A deterministic stand-in for the host CSPRNG: call N yields the
+        // big-endian 8-byte value N, truncated to the requested length.
+        let mut bytes = vec![0u8; len];
+        let sequence = requests.len() as u64;
+        let encoded = sequence.to_be_bytes();
+        let take = encoded.len().min(len);
+        bytes[len - take..].copy_from_slice(&encoded[encoded.len() - take..]);
+        Ok(bytes)
     }
 
     fn resolve_target(&self, raw: &str) -> Result<String, String> {
@@ -376,7 +392,7 @@ fn unit_evaluator_rejects_hash_slash_my_config() {
         Ok((value, _)) => panic!("expected #/my config to fail, got {}", value.display()),
         Err(error) => error,
     };
-    assert!(!error.to_string().is_empty());
+    assert_ne!(error.to_string(), "");
 }
 
 #[test]
@@ -385,7 +401,7 @@ fn unit_evaluator_rejects_bare_dot_my_config() {
         Ok((value, _)) => panic!("expected bare .my config to fail, got {}", value.display()),
         Err(error) => error,
     };
-    assert!(!error.to_string().is_empty());
+    assert_ne!(error.to_string(), "");
 }
 
 #[test]
@@ -877,9 +893,7 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
                     (cond ((and (equal? actor "did:ma:world#room")
                                 (equal? method "look"))
                            last-room)
-                          ((and (equal? actor "did:ma:world#mirror-exit")
-                                (equal? method "use"))
-                           "blocked")
+                          ((equal? method "move") ())
                           (else ())))
 
                 (set! calls ())
@@ -907,10 +921,13 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
 
                 (set! calls ())
                 (smoke "go" (lambda () (go "mirror")))
-                (assert (equal? (car calls)
-                    (list "did:ma:world#mirror-exit" "use"
-                          (list (make-map "did" "did:ma:me"
-                                          "parent" "did:ma:world#room")))))
+                (let ((call (car calls)))
+                  (assert (equal? (car call) "did:ma:world#room"))
+                  (assert (equal? (cadr call) "move"))
+                  (let ((ctx (car (caddr call))))
+                    (assert (equal? (map-ref ctx "direction") "mirror"))
+                    ; The traverse id is minted from the host random source.
+                    (assert (equal? (map-ref ctx "traverseId") "1"))))
 
                 (set! calls ())
                 (smoke "unlock exit with secret"
@@ -921,8 +938,9 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
         "#
     );
 
-    let (value, _) = eval(&source).unwrap();
+    let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "lock-rpcs-ok");
+    assert_eq!(ctx.random_requests.borrow().as_slice(), &[8]);
 }
 
 const EQUIP_SETUP: &str = r#"
@@ -1778,49 +1796,93 @@ fn production_avatar_go_traverses_exit_and_enters_target() {
                 (#.my.ctx.inv: "did:ma:world#inventory")
                 (#.my.ctx.nick: "tester")
 
-                (define hull
-                    (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
-                              "name" "Hull" "nick" "Hull"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
                               "exits" (make-map "hull" "did:ma:world#exit-hull")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
                     (set! calls (append calls (list (list actor method args))))
-                    (cond ((and (equal? actor "did:ma:world#inventory")
-                                (equal? method "kind?"))
-                           "/ma/container/0.0.1")
-                          ((equal? method "contents?") ())
-                          ((equal? method "use")
-                           (make-map "dst" "did:ma:world#elsewhere"
-                                     "secret" "ticket-1"))
+                    (cond ((equal? method "move") ())
                           ((equal? method "enter")
                            (make-map "parent" "did:ma:world#elsewhere"
                                      "nick" "tester"))
+                          ((equal? method "look") last-room)
                           (else ())))
 
                 (go "hull")
 
-                ; First hop: ask the exit to use our own did and parent.
-                (assert (equal? (car calls)
-                    (list "did:ma:world#exit-hull" "use"
-                          (list (make-map "did" "did:ma:me"
-                                          "parent" "did:ma:world#room")))))
-                ; The bless returned dst + a one-time secret; we enter with it.
-                (assert (equal? (car (cdr calls))
-                    (list "did:ma:world#elsewhere" "enter"
-                          (list (make-map "secret" "ticket-1"
-                                          "name" "did:ma:me"
-                                          "nick" "tester")))))
+                ; One :move ctx goes to the current room, carrying a fresh
+                ; random traverse id. No exit actor is addressed directly.
+                (assert (equal? (length calls) 1))
+                (let ((call (car calls)))
+                  (assert (equal? (car call) "did:ma:world#room"))
+                  (assert (equal? (cadr call) "move"))
+                  (let ((ctx (car (caddr call))))
+                    (assert (equal? (map-ref ctx "direction") "hull"))
+                    (assert (equal? (map-ref ctx "traverseId") "1"))))
+
+                ; The passage answers through the room with the established
+                ; destination and the key to present there.
+                (on-event ":move"
+                          (list (make-map "traverseId" "1"
+                                          "exit" "did:ma:world#elsewhere"
+                                          "key" "ticket-1")))
+
+                (let ((enter (cadr calls)))
+                  (assert (equal? (car enter) "did:ma:world#elsewhere"))
+                  (assert (equal? (cadr enter) "enter"))
+                  (let ((ctx (car (caddr enter))))
+                    (assert (equal? (map-ref ctx "did") "did:ma:me"))
+                    (assert (equal? (map-ref ctx "traverseId") "1"))
+                    (assert (equal? (map-ref ctx "key") "ticket-1"))))
+
                 ; The room address was updated from the entry reply.
                 (assert (equal? (#.my.ctx.room) "did:ma:world#elsewhere"))
                 "avatar-go-ok"
         "#
     );
 
-    let (value, _) = eval(&source).unwrap();
+    let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "avatar-go-ok");
+    assert_eq!(ctx.random_requests.borrow().as_slice(), &[8]);
+}
+
+#[test]
+fn production_avatar_go_mints_a_fresh_random_traverse_id() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    ())
+                (define (last-move-ctx)
+                    (car (caddr (car calls))))
+
+                ; Each walk asks the host CSPRNG for a new 8-byte traverse id.
+                (go "hull")
+                (assert (equal? (map-ref (last-move-ctx) "traverseId") "1"))
+                (set! calls ())
+                (go "hull")
+                (assert (equal? (map-ref (last-move-ctx) "traverseId") "2"))
+                "traverse-id-random-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "traverse-id-random-ok");
+    assert_eq!(ctx.random_requests.borrow().as_slice(), &[8, 8]);
 }
 
 #[test]
@@ -1838,29 +1900,32 @@ fn production_avatar_go_blocked_exit_does_not_reenter() {
                 (#.my.ctx.room: "did:ma:world#room")
                 (#.my.ctx.nick: "tester")
 
-                (define mirror
-                    (make-map "actor" "did:ma:world#exit-mirror" "kind" "exit"
-                              "name" "Mirror" "nick" "Mirror"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
                               "exits" (make-map "mirror" "did:ma:world#exit-mirror")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
                     (set! calls (append calls (list (list actor method args))))
-                    (if (equal? method "use")
-                      ; A locked exit refuses at once and narrates nogo_msg.
-                      (make-map "text" "The way is locked.")
-                      ()))
+                    ())
 
                 (go "mirror")
 
-                ; The exit was asked exactly once; a refusal never re-enters a
-                ; room. The refusal text is what go prints.
-                (assert (equal? calls
-                    (list (list "did:ma:world#exit-mirror" "use"
-                                (list (make-map "did" "did:ma:me"
-                                                "parent" "did:ma:world#room"))))))
+                ; One :move ctx goes to the room; no exit actor is addressed.
+                (assert (equal? (length calls) 1))
+                (let ((call (car calls)))
+                  (assert (equal? (car call) "did:ma:world#room"))
+                  (assert (equal? (cadr call) "move"))
+                  (let ((ctx (car (caddr call))))
+                    (assert (equal? (map-ref ctx "direction") "mirror"))
+                    (assert (equal? (map-ref ctx "traverseId") "1"))))
+
+                ; A denied passage answers with :deny and never re-enters a room.
+                (on-event ":move"
+                          (list (make-map "traverseId" "1"
+                                          "deny" "The way is locked.")))
+                (assert (equal? (length calls) 1))
                 "avatar-go-blocked-ok"
         "#
     );
@@ -1868,6 +1933,7 @@ fn production_avatar_go_blocked_exit_does_not_reenter() {
     let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "avatar-go-blocked-ok");
     assert_eq!(ctx.output.borrow().as_str(), "The way is locked.");
+    assert_eq!(ctx.random_requests.borrow().as_slice(), &[8]);
 }
 
 #[test]

@@ -11,6 +11,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use futures::future::LocalBoxFuture;
 
 use crate::ipc::{
     connect_socket, daemon_log_path, read_frame, write_frame, IpcStream, Request, Response,
@@ -273,17 +274,22 @@ fn spawn_daemon() -> Result<()> {
 struct ClientEval(DaemonClient);
 
 impl ReplEval for ClientEval {
-    async fn eval(&mut self, source: &str) -> Result<Option<String>, String> {
-        let outcome = match self.0.eval(source).await {
-            Ok(outcome) => outcome,
-            Err(e) => Err(format!("ipc error: {e}")),
-        };
-        // (display …) without a trailing newline would otherwise be
-        // overwritten by the next readline prompt redraw.
-        if self.0.dangling_output {
-            println!();
-            self.0.dangling_output = false;
-        }
-        outcome
+    fn eval<'a>(
+        &'a mut self,
+        source: &'a str,
+    ) -> LocalBoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async move {
+            let outcome = match self.0.eval(source).await {
+                Ok(outcome) => outcome,
+                Err(e) => Err(format!("ipc error: {e}")),
+            };
+            // (display …) without a trailing newline would otherwise be
+            // overwritten by the next readline prompt redraw.
+            if self.0.dangling_output {
+                println!();
+                self.0.dangling_output = false;
+            }
+            outcome
+        })
     }
 }

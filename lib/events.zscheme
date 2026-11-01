@@ -217,6 +217,27 @@
 ; Top-level unsolicited verbs addressed straight to the avatar: transport
 ; handshakes, direct prints, direct speech/emote (no ctx), refusal notices, and
 ; personal action completion. These are never room broadcasts.
+(define (event-move ctx)
+  ;; The passage answers a walk here: `deny` leaves us where we are, otherwise
+  ;; `exit` names the destination and `key` is what we present at `:enter`.
+  (if (map? ctx)
+    (let ((tid (map-ref ctx "traverseId" #f))
+          (deny (map-ref ctx "deny" #f))
+          (dest (map-ref ctx "exit" #f))
+          (key (map-ref ctx "key" #f)))
+      (cond ((not (string? tid)) ())
+            ((string? deny) (display deny) ())
+            ((and (string? dest) (starts-with-did? dest) (string? key))
+             (enter-with-key dest tid key))
+            (else ())))
+    ()))
+
+(define (event-nogo ctx)
+  (if (map? ctx)
+    (let ((text (map-ref ctx "narrate" #f)))
+      (if (string? text) (display text) ()))
+    ()))
+
 (define event-handlers
   (make-map ":print" event-print
             ":say" event-say-direct
@@ -228,7 +249,9 @@
             ":put" event-refuse-put
             ":set-parent" event-refuse-set-parent
             ":put-event" event-put
-            ":take-event" event-take-done))
+            ":take-event" event-take-done
+            ":move" event-move
+            ":nogo" event-nogo))
 
 ; Room and exit world events arrive wrapped in a single :event envelope so a
 ; room broadcast (:event :say <ctx> <text>) never collides with a direct term
