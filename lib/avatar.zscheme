@@ -390,9 +390,19 @@
 (define (new-traverse-id)
   (number->string (random 9223372036854775807)))
 
-(define (go direction)
+; Exit names are local words, not necessarily single tokens. Join the words the
+; focus grammar split, so `go a old mirror` addresses the exit named
+; `a old mirror`; an empty direction is a usage error, never a random walk.
+(define (direction-words words usage)
+  (let ((direction (join-words words)))
+    (if (equal? direction "") (error usage) direction)))
+
+(define go-usage "usage: go <direction...>")
+
+(define (go . words)
   (room-call "move"
-             (make-map "traverseId" (new-traverse-id) "direction" direction))
+             (make-map "traverseId" (new-traverse-id)
+                       "direction" (direction-words words go-usage)))
   nil)
 
 ; Complete a routed move: present the key at the destination the passage
@@ -407,18 +417,53 @@
     (let ((result (apply-entry-ctx! (actor-call target "enter" ctx))))
       (if (map? result) (look) (display result))))
   nil)
-(define (dig . args)
-  (apply room-call "dig" args))
+(define dig-usage
+  "usage: dig <direction> [to <name...>] [back <direction>] [with <code>]\n       dig <passage-did-url> <name>")
 
-(define (fill direction)
-  (room-call "fill" direction))
+; A successful build is silent here: the room's own :print carries the
+; narration. A rename reply carries text worth showing, and an actor error must
+; not be swallowed.
+(define (show-dig-reply reply)
+  (cond ((ok? reply) nil)
+        ((ok-reply? reply)
+         (let ((payload (if (null? (cdr reply)) #f (car (cdr reply)))))
+           (when (and payload (not (equal? payload "")))
+             (display payload)))
+         nil)
+        (else (error (err-msg reply)))))
+
+; World-building. `to`, `back`, and `with` are hard separators, so a multi-word
+; room name never swallows the return direction:
+;   dig down to "Top of a very large tree" back up
+; `back` names the same passage in the destination room; without it both ends
+; use the source direction. A passage DID-URL in the first slot is the rename
+; form — it rebinds this room's local name and never digs anything:
+;   dig did:ma:<runtime>#passage-… up
+(define (dig . args)
+  (cond
+    ((null? args) (error dig-usage))
+    ((starts-with-did? (car args))
+     (let ((name (if (null? (cdr args)) #f (car (cdr args)))))
+       (cond ((not name) (error dig-usage))
+             ((not (null? (cdr (cdr args)))) (error dig-usage))
+             ((starts-with-did? name)
+              (error "the exit name must not be a DID or DID-URL"))
+             (else (show-dig-reply (room-call "dig" (car args) name))))))
+    (else (show-dig-reply (apply room-call "dig" args)))))
+
+(define fill-usage "usage: fill <direction...>")
+
+(define (fill . words)
+  (room-call "fill" (direction-words words fill-usage)))
 
 ; Look through an exit without traversing it: `delve <direction>` fetches the
 ; exit's destination (`:to?`) and shows that room's name (`:name?`). A dangling
 ; exit reports it leads nowhere; an unreachable destination surfaces as the
 ; ordinary `:name?` actor-call error.
-(define (delve direction)
-  (let ((target (actor-call (resolve-exit direction) "to?")))
+(define delve-usage "usage: delve <direction...>")
+
+(define (delve . words)
+  (let ((target (actor-call (resolve-exit (direction-words words delve-usage)) "to?")))
     (if (and (string? target) (starts-with-did? target))
         (display (actor-call target "name?"))
         (display "This exit leads nowhere.")))
@@ -1242,7 +1287,7 @@
     (display (command (join-words rest) "help"))
     (display
       (string-append
-        "go <direction>          move through a named exit\n"
+        "go <direction...>       move through a named exit\n"
         "help                    show this command list\n"
         "help <name>             show usage for something here or in your inventory\n"
         "look                    show the current room\n"
@@ -1277,9 +1322,10 @@
         "lock <target...> [with <secret>]  lock a container or room exit you own\n"
         "unlock <target...> [with <secret>]  unlock as owner, or with the lock secret\n"
         "remove <child...>       owner repairs a stale room child\n"
-        "dig <direction>         create a new exit\n"
-        "fill <direction>        remove an exit\n"
-        "delve <direction>       look through an exit at its destination\n"
+        "dig <direction> [to <name...>] [back <direction>]  create a two-ended exit\n"
+        "dig <passage-did> <name>  rename this room's local exit\n"
+        "fill <direction...>     remove an exit\n"
+        "delve <direction...>    look through an exit at its destination\n"
         "forge <kind> named <name...>  create a new thing in your hand (drops current held item first)\n"
         "enter <target> <nick>   enter a room directly by address\n"
         "start-here              trigger the current room to cascade :here to its children\n"
@@ -1315,7 +1361,7 @@
       (if entry
         (cond ((equal? (map-ref entry "kind" "") "container")
                (display (actor-call (entry-actor entry) "look")))
-              ((equal? (map-ref entry "kind" "") "exit")
+              ((equal? (map-ref entry "kind" "") "passage")
                (display (actor-call (entry-actor entry) "look")))
               (else (look-entry entry)))
         (error (string-append word " is not here."))))

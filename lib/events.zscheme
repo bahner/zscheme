@@ -173,7 +173,14 @@
 (define (event-dig ctx direction)
   (guard (e (#t #f))
     (remember-room! (room-call "look")))
-  (display (string-append (event-name ctx) " digs " direction ".")))
+  (display (string-append (event-name ctx) " digs " direction "."))
+  ; The room broadcasts :dig only after the passage is installed. If this is
+  ; our own dig, follow it through now; waiting for the player to type `go`
+  ; races the async room-creation callback.
+  (when (and (map? ctx)
+             (or (same-did-identity? (map-ref ctx "did" #f) (#.my.identity.did))
+                 (same-did-identity? (map-ref ctx "actor" #f) (#.my.identity.did))))
+    (go direction)))
 
 (define (event-fill ctx direction)
   (guard (e (#t #f))

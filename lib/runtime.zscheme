@@ -45,6 +45,13 @@
        (>= (string-length value) 7)
        (equal? (substring value 0 7) "did:ma:")))
 
+; Compare two DID values by identity, ignoring any DID-URL fragment. Actor
+; messages carry the sender's inbox DID-URL (`…#inbox`), while local identity
+; paths hold the bare DID, so a plain string comparison would miss ourselves.
+(define (same-did-identity? a b)
+  (and (string? a) (string? b)
+       (equal? (car (string-split a "#")) (car (string-split b "#")))))
+
 (define (entry-actor entry)
   (map-ref entry "actor" (map-ref entry "did" #f)))
 

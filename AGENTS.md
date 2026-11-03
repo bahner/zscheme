@@ -56,8 +56,8 @@ The host delivers typed unsolicited events but must not sequence `:hold`,
 container/duckie/object-transfer decision.
 
 Exit traversal is `:move` all the way and lives in the lambda-ma actors plus
-the avatar's thin wrappers. `go <direction>` mints a `traverseId` and sends one
-`:move` ctx to the current room; the room hands it to the passage, the passage
+the avatar's thin wrappers. `go <direction...>` joins its words into the exit's
+local name, mints a `traverseId`, and sends one `:move` ctx to the current room; the room hands it to the passage, the passage
 routes it and relays the destination's answer back, and the room removes the
 traveller and forwards the move ctx. The answer arrives as a `:move` event
 carrying either `deny` or the established `exit` room plus `key`; `event-move`
@@ -68,6 +68,21 @@ passage; a lock is global, never per-player). Narration uses the LambdaCore
 props (`leave_msg`, `oleave_msg`, `arrive_msg`, `oarrive_msg`, `nogo_msg`,
 `onogo_msg`); a room's `public` prop decides whether it admits directly or
 requires a key.
+
+Durability follows the same path: `dig <direction> [to <name...>] [back <direction>]`
+creates the passage (and a room when none is named), and the room broadcasts
+`:dig` only once that passage is installed. `to`, `back`, and `with` are hard
+separators in the avatar grammar, so a multi-word room name never swallows the
+return direction: `dig down to "Top of a very large tree" back up`. `back`
+names the same passage in the destination room (default: the source direction),
+so either endpoint may use its own word. A local exit name may contain spaces;
+`go`, `fill`, and `delve` all join their words into one direction, so a name
+such as `a old mirror` needs no quoting. A passage DID-URL in the first slot is
+the local rename form — `dig did:ma:<runtime>#passage-… up` rebinds this room's
+`exits` entry and never digs a new passage; each room's local name is cosmetic
+and independent. `event-dig` uses the `:dig` broadcast to make the digger's own
+avatar walk the new direction, so digging does not race a follow-up `go`; other
+occupants only see the narration.
 
 The host forwards **every** unsolicited actor term, not a curated subset, and no
 longer validates argument shapes. `on-event` is therefore the only filter:

@@ -606,7 +606,7 @@ const AVATAR_TEST_PREAMBLE: &str = r#"
                 (define coin (make-map "actor" "did:ma:world#coin" "kind" "thing"
                                        "parent" "did:ma:world#inventory" "name" "Silver Coin"))
                 (define hull-exit
-                    (make-map "actor" "did:ma:world#exit-hull" "kind" "exit"
+                    (make-map "actor" "did:ma:world#exit-hull" "kind" "passage"
                               "name" "hull" "nick" "hull"))
                 (define room-snapshot
                     (make-map "actor" "did:ma:world#room" "parent" "did:ma:world#room"
@@ -685,6 +685,43 @@ fn avatar_command_test_source() -> String {
 fn production_avatar_commands_accept_representative_arguments() {
     let (value, _) = eval(&avatar_command_test_source()).unwrap();
     assert_eq!(value.display(), "avatar-commands-ok");
+}
+
+/// The avatar owns the human `dig` grammar: it forwards `to`/`back`/`with`
+/// unchanged to the room, and treats a passage DID-URL in the first slot as the
+/// local rename form rather than a new direction.
+#[test]
+fn production_avatar_dig_forwards_back_and_rename_forms() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.ctx.room: "did:ma:world#room")
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (list ":ok" ()))
+
+                (dig "down" "to" "Top of a very large tree" "back" "up")
+                (dig "did:ma:world#passage-1" "up")
+
+                (assert (equal? (list-ref calls 0)
+                                (list "did:ma:world#room" "dig"
+                                      (list "down" "to" "Top of a very large tree" "back" "up"))))
+                (assert (equal? (list-ref calls 1)
+                                (list "did:ma:world#room" "dig"
+                                      (list "did:ma:world#passage-1" "up"))))
+                "avatar-dig-grammar"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "avatar-dig-grammar");
 }
 
 #[test]
@@ -878,7 +915,7 @@ fn production_avatar_lock_unlock_and_go_with_secret_route_correctly() {
                     (make-map "actor" "did:ma:world#box" "kind" "container"
                               "parent" "did:ma:world#room" "name" "Box"))
                 (define mirror
-                    (make-map "actor" "did:ma:world#mirror-exit" "kind" "exit"
+                    (make-map "actor" "did:ma:world#mirror-exit" "kind" "passage"
                               "name" "mirror" "nick" "mirror"))
                 (set! last-room
                     (make-map "actor" "did:ma:world#room"
@@ -1883,6 +1920,95 @@ fn production_avatar_go_mints_a_fresh_random_traverse_id() {
     let (value, ctx) = eval(&source).unwrap();
     assert_eq!(value.display(), "traverse-id-random-ok");
     assert_eq!(ctx.random_requests.borrow().as_slice(), &[8, 8]);
+}
+
+#[test]
+fn production_avatar_go_joins_a_multi_word_exit_name() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    ())
+
+                ; Exit names are local words, so a name with spaces must be
+                ; joined back into one direction before it crosses the wire.
+                (go "a" "old" "mirror")
+
+                (assert (equal? (length calls) 1))
+                (assert (equal? (car (car calls)) "did:ma:world#room"))
+                (assert (equal? (cadr (car calls)) "move"))
+                (assert (equal? (map-ref (car (caddr (car calls))) "direction")
+                                "a old mirror"))
+                "multi-word-go-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "multi-word-go-ok");
+}
+
+#[test]
+fn production_avatar_follows_its_own_dig_through_the_new_passage() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
+                              "exits" (make-map "down" "did:ma:world#passage-down")))
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (if (equal? method "look") last-room ()))
+
+                ; Another occupant dug: we watch, but do not walk for them.
+                (on-event ":event"
+                          (list ":dig"
+                                (make-map "did" "did:ma:other" "name" "Other")
+                                "down"))
+                (assert (equal? (length calls) 1))
+
+                (set! calls ())
+                ; Our own dig is keyed by the sender's #inbox DID-URL; the
+                ; avatar must recognise the bare identity behind it and walk
+                ; the passage the room has now installed.
+                (on-event ":event"
+                          (list ":dig"
+                                (make-map "did" "did:ma:me#inbox" "name" "Fiona")
+                                "down"))
+                (assert (equal? (length calls) 2))
+                (let ((move (cadr calls)))
+                  (assert (equal? (car move) "did:ma:world#room"))
+                  (assert (equal? (cadr move) "move"))
+                  (let ((ctx (car (caddr move))))
+                    (assert (equal? (map-ref ctx "direction") "down"))
+                    (assert (equal? (map-ref ctx "traverseId") "1"))))
+                "dig-follow-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "dig-follow-ok");
 }
 
 #[test]
