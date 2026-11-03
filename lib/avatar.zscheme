@@ -145,13 +145,19 @@
              (pool2 (if (map? room2) (pool-getter room2) ())))
         (candidates-by-keys word pool2 keys)))))
 
+; Resolve a word to exactly one candidate entry from the given pool, using
+; the ordinary no-match/ambiguous error contract. Callers that need a field
+; other than the actor DID resolve the entry themselves.
+(define (resolve-entry-against pool-getter word keys)
+  (let ((candidates (resolve-against-or-false pool-getter word keys)))
+    (cond ((null? candidates) (no-match-error word))
+          ((null? (cdr candidates)) (car candidates))
+          (else (ambiguous-error word candidates)))))
+
 (define (resolve-against pool-getter word keys)
   (if (starts-with-did? word)
     word
-    (let ((candidates (resolve-against-or-false pool-getter word keys)))
-      (cond ((null? candidates) (no-match-error word))
-            ((null? (cdr candidates)) (entry-actor (car candidates)))
-            (else (ambiguous-error word candidates))))))
+    (entry-actor (resolve-entry-against pool-getter word keys))))
 
 ; The runtime-layer contract is defined in runtime.zscheme, not here. The
 ; avatar layer decides which candidate pool to search (room snapshot, inventory,
@@ -259,8 +265,16 @@
   (entry-actor (resolve-one-entry word pool)))
 
 ; Exits match on their local name, which is the only word a player uses to
-; walk through; `go` sends one `:move` ctx to the current room.
+; walk through. `resolve-exit` returns the passage DID for verbs that address
+; the exit actor (`delve`, lock/unlock); `resolve-exit-name` returns the local
+; name the room's `:move` expects, so a partial word such as "rope" can select
+; an exit named "hanging rope".
 (define (resolve-exit word) (resolve-against exit-pool word (list "nick" "name")))
+
+(define (resolve-exit-name word)
+  (map-ref
+    (resolve-entry-against exit-pool word (list "nick" "name"))
+    "name" word))
 
 ; A container's own contents aren't in any room snapshot — the container has
 ; to be asked directly, exactly like resolving anything else that isn't here.
@@ -391,8 +405,9 @@
   (number->string (random 9223372036854775807)))
 
 ; Exit names are local words, not necessarily single tokens. Join the words the
-; focus grammar split, so `go a old mirror` addresses the exit named
-; `a old mirror`; an empty direction is a usage error, never a random walk.
+; focus grammar split, then resolve them against the room's exits so a partial
+; word selects the one matching local name (and ambiguity is reported). An
+; empty direction is a usage error, never a random walk.
 (define (direction-words words usage)
   (let ((direction (join-words words)))
     (if (equal? direction "") (error usage) direction)))
@@ -402,7 +417,7 @@
 (define (go . words)
   (room-call "move"
              (make-map "traverseId" (new-traverse-id)
-                       "direction" (direction-words words go-usage)))
+                       "direction" (resolve-exit-name (direction-words words go-usage))))
   nil)
 
 ; Complete a routed move: present the key at the destination the passage

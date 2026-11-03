@@ -1899,6 +1899,10 @@ fn production_avatar_go_mints_a_fresh_random_traverse_id() {
 
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
+                              "exits" (make-map "hull" "did:ma:world#exit-hull")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
@@ -1923,7 +1927,7 @@ fn production_avatar_go_mints_a_fresh_random_traverse_id() {
 }
 
 #[test]
-fn production_avatar_go_joins_a_multi_word_exit_name() {
+fn production_avatar_go_resolves_a_partial_exit_name() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
         .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
@@ -1935,27 +1939,73 @@ fn production_avatar_go_joins_a_multi_word_exit_name() {
 
                 (#.my.identity.did: "did:ma:me")
                 (#.my.ctx.room: "did:ma:world#room")
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
+                              "exits" (make-map "hanging rope" "did:ma:world#rope"
+                                                "north" "did:ma:world#north")))
 
                 (define calls ())
                 (define (actor-call actor method . args)
                     (set! calls (append calls (list (list actor method args))))
                     ())
 
-                ; Exit names are local words, so a name with spaces must be
-                ; joined back into one direction before it crosses the wire.
-                (go "a" "old" "mirror")
-
+                ; A partial word selects the exit whose local name contains it;
+                ; the room still receives that exit's exact local name.
+                (go "rope")
                 (assert (equal? (length calls) 1))
                 (assert (equal? (car (car calls)) "did:ma:world#room"))
                 (assert (equal? (cadr (car calls)) "move"))
                 (assert (equal? (map-ref (car (caddr (car calls))) "direction")
-                                "a old mirror"))
-                "multi-word-go-ok"
+                                "hanging rope"))
+
+                ; A multi-word spelling joins and resolves to the same name.
+                (set! calls ())
+                (go "hanging" "rope")
+                (assert (equal? (map-ref (car (caddr (car calls))) "direction")
+                                "hanging rope"))
+                "exit-name-resolve-ok"
         "#
     );
 
     let (value, _) = eval(&source).unwrap();
-    assert_eq!(value.display(), "multi-word-go-ok");
+    assert_eq!(value.display(), "exit-name-resolve-ok");
+}
+
+#[test]
+fn production_avatar_go_reports_ambiguous_exit_names() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (set! last-room
+                    (make-map "actor" "did:ma:world#room" "name" "Room"
+                              "children" (make-map)
+                              "exits" (make-map "hanging rope" "did:ma:world#rope"
+                                                "coiled rope" "did:ma:world#coil")))
+
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    ())
+
+                ; Two exits contain "rope": report the candidates and send nothing.
+                (define failure (guard (e (#t e)) (go "rope") "no-error"))
+                (assert (string-contains failure "matches more than one"))
+                (assert (null? calls))
+                "exit-name-ambiguous-ok"
+        "#
+    );
+
+    let (value, _) = eval(&source).unwrap();
+    assert_eq!(value.display(), "exit-name-ambiguous-ok");
 }
 
 #[test]
