@@ -439,11 +439,16 @@
 ; narration. A rename reply carries text worth showing, and an actor error must
 ; not be swallowed.
 (define (show-dig-reply reply)
-  (cond ((ok? reply) nil)
+  (cond ((or (ok? reply) (null? reply)) nil)
         ((ok-reply? reply)
          (let ((payload (if (null? (cdr reply)) #f (car (cdr reply)))))
            (when (and payload (not (equal? payload "")))
              (display payload)))
+         nil)
+        ; Hosts flatten an `(:ok text)` reply to its payload, so a plain
+        ; non-empty string is a successful rename answer worth showing.
+        ((string? reply)
+         (when (not (equal? reply "")) (display reply))
          nil)
         (else (error (err-msg reply)))))
 

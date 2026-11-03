@@ -724,6 +724,40 @@ fn production_avatar_dig_forwards_back_and_rename_forms() {
     assert_eq!(value.display(), "avatar-dig-grammar");
 }
 
+/// A successful dig ack may arrive as `Nil`, the `:ok` atom, or a flattened
+/// `(:ok text)` payload depending on the host, and none of them is an actor
+/// error. Only a real `(:error reason)` reply may raise.
+#[test]
+fn production_avatar_dig_accepts_host_flattened_replies() {
+    let source = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {source}
+
+                (show-dig-reply nil)
+                (show-dig-reply ":ok")
+                (show-dig-reply "Exit up -> did:ma:world#passage-1")
+                (show-dig-reply (list ":ok"))
+                (show-dig-reply (list ":ok" "Exit down -> did:ma:world#passage-2"))
+                (assert (guard (e (#t (string-contains e "not authorised")))
+                    (show-dig-reply (list ":error" "not authorised"))
+                    #f))
+                "dig-replies-ok"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "dig-replies-ok");
+    assert_eq!(
+        ctx.output.borrow().as_str(),
+        "Exit up -> did:ma:world#passage-1Exit down -> did:ma:world#passage-2"
+    );
+}
+
 #[test]
 fn production_avatar_enter_leaves_previous_room() {
     // A move into a different room ends presence in the previous one: the
