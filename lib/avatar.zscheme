@@ -617,6 +617,36 @@
   (guard (e (#t (error (string-append description " — " e))))
     (thunk)))
 
+; A local slot can outlive the actor it names (the container may have been
+; recycled while the client was away). The runtime's fragment router answers
+; such an address with "unknown entity fragment" — the same signal ma-operator
+; uses to recover a stale cached room. It is a router reply, not an entity
+; liveness probe: a crashed or wedged actor sends nothing (Hewitt), so silence
+; must never be read as death.
+(define (unknown-fragment-error? failure)
+  (string-contains failure "unknown entity"))
+
+; Slots are bookkeeping, not authority. A message that had to reach the actor
+; anyway told us the runtime no longer knows this address, so the slots naming
+; it are forgotten instead of failing every later command.
+(define (forget-stale-slots! target)
+  (when (and held-item (equal? target (entry-actor held-item)))
+    (held-clear!))
+  (when (equal? target (my-inv-if-any))
+    (set! inv-entry #f)
+    (#.my.ctx.inv:))
+  (display (string-append target " no longer exists")))
+
+; Relocate one actor the avatar is already parent to: the room :drop capacity
+; pre-check, then the ordinary :set-parent relocation every drop path uses.
+; Returns #f only when the router says the target fragment is unknown; every
+; other refusal (room full, not authorised, transport) propagates untouched.
+(define (relocate-to-room! target)
+  (actor-call (room) "drop" target)
+  (guard (e ((unknown-fragment-error? e) (forget-stale-slots! target) #f))
+    (actor-call target "set-parent" (room))
+    #t))
+
 ; Room-relocate the currently held item to make room for a new pick-up. The
 ; inventory container is never a held item: a stale hand slot that still points
 ; at it must not drop the user's equipped inventory — the new item's :parent
@@ -626,8 +656,7 @@
   (when held-item
     (let ((current (entry-actor held-item)))
       (unless (equal? current (my-inv-if-any))
-        (actor-call (room) "drop" current)
-        (actor-call current "set-parent" (room))))))
+        (relocate-to-room! current)))))
 
 (define take-usage "usage: take <item...> [from <container...>]")
 
@@ -780,8 +809,7 @@
 (define (book-inventory! did ctx)
   (let ((old (my-inv-if-any)))
     (when (and old (not (equal? old did)))
-      (actor-call (room) "drop" old)
-      (actor-call old "set-parent" (room))))
+      (relocate-to-room! old)))
   (set! inv-entry ctx)
   (#.my.ctx.inv: did)
   (display (string-append "inventory set to " did)))
@@ -851,12 +879,11 @@
 (define (drop-container-pool)
   (append (resolve-room-pool) (drop-pool)))
 
-; Room-relocate an actor the avatar is already parent to: the room :drop
-; capacity pre-check, then the ordinary :set-parent relocation every drop
-; path uses. Dropping the equipped inventory container also unbooks it.
+; Explicit drop: the shared relocation, plus unbooking when the equipped
+; inventory container itself is the target. A slot naming a vanished actor is
+; forgotten by relocate-to-room! instead of trapping the hand forever.
 (define (drop-target-to-room! target)
-  (actor-call (room) "drop" target)
-  (actor-call target "set-parent" (room))
+  (relocate-to-room! target)
   (when (equal? target (my-inv-if-any)) (#.my.ctx.inv:)))
 
 ; `drop <item> [from <container>]` whose item lives inside a container is

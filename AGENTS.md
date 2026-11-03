@@ -128,6 +128,13 @@ object, then sends the recipient an ordinary text message containing the full
 `claim <object-did-url> <secret>` command. It never changes `owner` directly,
 and received offer text is never evaluated automatically.
 
+Local hand and inventory slots (`held-item`, `.my.ctx.inv`) are client-side
+bookkeeping, not authority. They are cleared by the old parent's own `:parent`
+confirmation after a real move, or by the runtime fragment router's explicit
+`unknown entity fragment` reply when the named actor no longer exists. Never
+infer absence from silence, a timeout, or a transport error, and never clear a
+slot optimistically: those cases must propagate as errors and keep the slot.
+
 `lib/stdlib.zscheme`, `lib/runtime.zscheme`, `lib/avatar.zscheme`, and
 `lib/events.zscheme` are the four authoritative development layers.
 `lib/.z.scheme` is their ignored, generated physical concatenation in that

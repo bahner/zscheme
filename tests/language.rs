@@ -1592,6 +1592,80 @@ fn production_avatar_drop_reaches_nested_inventory_through_take_gate() {
 }
 
 #[test]
+fn production_avatar_forgets_slots_whose_actor_has_vanished() {
+    let libs = ["stdlib", "runtime", "avatar", "events"]
+        .into_iter()
+        .map(|name| fs::read_to_string(format!("lib/{name}.zscheme")).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        r#"
+                {libs}
+
+                (#.my.identity.did: "did:ma:me")
+                (#.my.ctx.room: "did:ma:world#room")
+                (define calls ())
+                (define (actor-call actor method . args)
+                    (set! calls (append calls (list (list actor method args))))
+                    (cond ((and (equal? actor "did:ma:world#ghost")
+                                (member? method (list "set-parent" "kind?")))
+                           (error "unknown entity fragment: ghost"))
+                          ((and (equal? actor "did:ma:world#crate")
+                                (equal? method "set-parent"))
+                           (error "set-parent must be requested by current parent"))
+                          (else ())))
+
+                ; A hand slot can outlive its actor. The router's unknown-fragment
+                ; reply is the only evidence used, so the slot is forgotten and
+                ; nothing is silently relocated.
+                (set! held-item (make-map "actor" "did:ma:world#ghost"
+                                          "kind" "container" "name" "Ghost"))
+                (drop)
+                (assert (not held-item))
+                (assert (member? (list "did:ma:world#room" "drop"
+                                       (list "did:ma:world#ghost")) calls))
+
+                ; The same reply clears an equipped slot that has vanished.
+                (set! calls ())
+                (#.my.ctx.inv: "did:ma:world#ghost")
+                (drop "did:ma:world#ghost")
+                (assert (not (my-inv-if-any)))
+
+                ; A live item still relocates: the hand is cleared only by the
+                ; old parent's later :parent confirmation, never optimistically.
+                (set! calls ())
+                (set! held-item (make-map "actor" "did:ma:world#lamp"
+                                          "kind" "thing" "name" "Lamp"))
+                (drop)
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#lamp"))
+                (assert (member? (list "did:ma:world#lamp" "set-parent"
+                                       (list "did:ma:world#room")) calls))
+
+                ; A live actor's refusal is not evidence of absence: the error
+                ; propagates with the action context and the hand keeps it.
+                (set! held-item (make-map "actor" "did:ma:world#crate"
+                                          "kind" "container" "name" "Crate"))
+                (define refusal
+                    (guard (failure
+                                ((string-contains failure "could not drop it") "refused")
+                                (#t (error failure)))
+                        (drop)))
+                (assert (equal? refusal "refused"))
+                (assert (equal? (entry-actor (car (hand-pool))) "did:ma:world#crate"))
+                "forgets-vanished"
+        "#
+    );
+
+    let (value, ctx) = eval(&source).unwrap();
+    assert_eq!(value.display(), "forgets-vanished");
+    let output = ctx.output.borrow();
+    assert!(
+        output.contains("did:ma:world#ghost no longer exists"),
+        "expected a vanished-actor note, got: {output:?}"
+    );
+}
+
+#[test]
 fn production_avatar_equip_keeps_unrelated_held_item() {
     let source = ["stdlib", "runtime", "avatar", "events"]
         .into_iter()
